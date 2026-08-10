@@ -34,3 +34,19 @@ Thumbs.db
 
 *.failed_*
 *.failed*
+backups/
+build_scripts/
+docs/
+PDF POSTER/
+pdf-poster-studio/
+patch_history.json
+
+rotation_zoom_audit.py
+rotation_zoom_audit.txt
+wholepage_rotation_diagnose.txt
+validate_presets.py
+create_release*.py
+build_exe.py
+release_cleanup*.py
+current_ui_audit.py
+diagnose_*.py
