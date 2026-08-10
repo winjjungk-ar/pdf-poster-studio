@@ -31,3 +31,6 @@ projects/
 
 .DS_Store
 Thumbs.db
+
+*.failed_*
+*.failed*
