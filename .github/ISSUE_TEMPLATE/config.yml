@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: PDF Poster Studio Releases
+    url: https://github.com/winjjungk-ar/pdf-poster-studio/releases
+    about: Download the latest beta release.
