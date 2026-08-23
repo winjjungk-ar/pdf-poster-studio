@@ -1,7 +1,25 @@
 from pathlib import Path
+import sys
 
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+def _get_base_dir() -> Path:
+    """Return app base directory for source and PyInstaller builds.
+
+    In source mode:
+        project root
+
+    In PyInstaller one-folder mode:
+        folder containing the EXE
+
+    This keeps data, exports, and projects writable beside the EXE.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+
+    return Path(__file__).resolve().parent.parent
+
+
+BASE_DIR = _get_base_dir()
 DATA_DIR = BASE_DIR / "data"
 PROJECTS_DIR = BASE_DIR / "projects"
 EXPORTS_DIR = BASE_DIR / "exports"

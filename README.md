@@ -1,4 +1,4 @@
-﻿# PDF Poster Studio
+# PDF Poster Studio
 
 **PDF Poster Studio** is a Windows desktop app for creating print-ready PDFs from PDF and image files.
 

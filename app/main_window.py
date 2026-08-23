@@ -1,9 +1,13 @@
+from app.ocr_settings import load_ocr_settings, save_ocr_settings
+from app.search_engine import search_pdf_ocr_from_page, search_pdf_ocr_from_page_limited, search_pdf_with_optional_ocr
+from app.localization import t, set_language, current_language
 from pathlib import Path
 import os
+import webbrowser
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, QRect, QTimer, QSize
-from PyQt6.QtGui import QPixmap, QTransform, QKeySequence, QAction, QImage, QPainter, QIcon, QColor, QPen, QBrush, QFont
+from PyQt6.QtGui import QAction, QBrush, QColor, QFont, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap, QShortcut, QTransform
 import fitz
 
 from PyQt6.QtPrintSupport import QPrintDialog, QPrinter
@@ -94,6 +98,7 @@ class MainWindow(QMainWindow):
         self.current_display_scale_y = 1.0
         self.render_zoom = 2.5
         self.preview_zoom_factor = 1.0
+        self.preview_quality_scale = 2.5
         self.preview_zoom_min = 0.25
         self.preview_zoom_max = 5.0
         self.preview_zoom_step = 1.25
@@ -106,13 +111,14 @@ class MainWindow(QMainWindow):
         # Show the manual-selection Output Area notice only once per app session.
         self._selection_output_area_notice_shown = False
 
-        self.setWindowTitle("PDF Poster Studio - Maps, Posters & Drawings")
+        self.setWindowTitle(t("app_title_long"))
         self.setWindowIcon(self._create_app_icon())
 
         # Start comfortably on any monitor, then maximize after the UI is created.
         self.setMinimumSize(1000, 700)
 
         self._create_menus()
+        self._setup_page_shortcuts()
         self._create_quick_toolbar()
         self._create_central_ui()
         self._refresh_recent_projects_menu()
@@ -127,6 +133,70 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.showMaximized)
         QTimer.singleShot(350, self._show_welcome_dialog)
 
+
+
+    def _setup_page_shortcuts(self):
+        self.page_down_shortcut = QShortcut(QKeySequence(Qt.Key.Key_PageDown), self)
+        self.page_down_shortcut.activated.connect(self.next_page)
+
+        self.page_up_shortcut = QShortcut(QKeySequence(Qt.Key.Key_PageUp), self)
+        self.page_up_shortcut.activated.connect(self.previous_page)
+
+        self.home_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Home), self)
+        self.home_shortcut.activated.connect(self._go_first_page_by_shortcut)
+
+        self.end_shortcut = QShortcut(QKeySequence(Qt.Key.Key_End), self)
+        self.end_shortcut.activated.connect(self._go_last_page_by_shortcut)
+
+    def _go_first_page_by_shortcut(self):
+        if getattr(self, "page_count", 0) <= 0:
+            return
+        self.current_page_index = 0
+        self._render_current_page()
+
+    def _go_last_page_by_shortcut(self):
+        if getattr(self, "page_count", 0) <= 0:
+            return
+        self.current_page_index = self.page_count - 1
+        self._render_current_page()
+
+
+    def show_home_tab(self):
+        if hasattr(self, "settings_scroll"):
+            self.settings_scroll.setVisible(True)
+
+        if hasattr(self, "toggle_settings_action"):
+            self.toggle_settings_action.setText(t("wide_view"))
+
+        try:
+            self._show_welcome_dialog(force=True)
+        except TypeError:
+            self._show_welcome_dialog()
+
+
+    def toggle_settings_panel(self):
+        if not hasattr(self, "settings_scroll"):
+            return
+
+        visible = self.settings_scroll.isVisible()
+        self.settings_scroll.setVisible(not visible)
+
+        if hasattr(self, "toggle_settings_action"):
+            self.toggle_settings_action.setText(
+                t("show_settings") if visible else t("wide_view")
+            )
+
+        if hasattr(self, "main_splitter"):
+            if visible:
+                self.main_splitter.setSizes([1, 0])
+            else:
+                self.main_splitter.setSizes([1200, 360])
+
+        if hasattr(self, "current_pixmap") and self.current_pixmap is not None:
+            try:
+                self._show_pixmap()
+            except Exception:
+                pass
 
 
     def _create_app_icon(self) -> QIcon:
@@ -170,12 +240,12 @@ class MainWindow(QMainWindow):
         painter.end()
         return QIcon(pixmap)
 
-    def _show_welcome_dialog(self) -> None:
-        if hasattr(self, "workspace_items") and self.workspace_items:
+    def _show_welcome_dialog(self, force: bool = False) -> None:
+        if not force and hasattr(self, "workspace_items") and self.workspace_items:
             return
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("Welcome to PDF Poster Studio")
+        dialog.setWindowTitle(t("welcome_dialog_title"))
         dialog.setModal(True)
         dialog.setMinimumWidth(720)
         dialog.setWindowIcon(self.windowIcon())
@@ -228,20 +298,20 @@ class MainWindow(QMainWindow):
             }
         """)
 
-        title = QLabel("PDF Poster Studio")
+        title = QLabel(t("app_title"))
         title.setObjectName("welcomeTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Print large maps, posters, game boards, and engineering drawings from PDF or image files."
+            t("welcome_subtitle")
         )
         subtitle.setObjectName("welcomeSubtitle")
         subtitle.setWordWrap(True)
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle)
 
-        prompt = QLabel("What do you want to do?")
+        prompt = QLabel(t("welcome_prompt"))
         prompt.setStyleSheet("font-size: 16px; font-weight: 800; color: #395B64;")
         prompt.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(prompt)
@@ -262,37 +332,37 @@ class MainWindow(QMainWindow):
         add_task_button(
             0,
             0,
-            "🖼  Make Poster\nTile maps, posters, images, or drawings",
+            t("welcome_task_make_poster"),
             self.task_make_poster,
         )
         add_task_button(
             0,
             1,
-            "🧩  Merge PDFs\nCombine full pages into one PDF",
+            t("welcome_task_merge_pdfs"),
             self.task_merge_pdfs,
         )
         add_task_button(
             1,
             0,
-            "📄  Extract Pages\nPick page ranges and export them",
+            t("welcome_task_extract_pages"),
             self.task_extract_pages,
         )
         add_task_button(
             1,
             1,
-            "✂  Selected Area PDF\nExport only the area you select",
+            t("welcome_task_selected_area_pdf"),
             self.task_selected_area_pdf,
         )
         add_task_button(
             2,
             0,
-            "🔄  Rotate Pages\nRotate pages and save a new PDF",
+            t("welcome_task_rotate_pages"),
             self.task_rotate_pages,
         )
         add_task_button(
             2,
             1,
-            "📂  Open Project\nContinue a saved workspace",
+            t("welcome_task_open_project"),
             self.open_project,
         )
 
@@ -301,11 +371,11 @@ class MainWindow(QMainWindow):
         bottom_layout = QHBoxLayout()
         bottom_layout.addStretch()
 
-        open_files_button = QPushButton("Open PDFs / Images")
+        open_files_button = QPushButton(t("open_pdfs_images"))
         open_files_button.setProperty("class", "bottomButton")
         open_files_button.clicked.connect(lambda: run_task(self.open_pdfs))
 
-        continue_button = QPushButton("Continue")
+        continue_button = QPushButton(t("continue"))
         continue_button.setProperty("class", "bottomButton")
         continue_button.clicked.connect(dialog.reject)
 
@@ -315,7 +385,9 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(bottom_layout)
 
-        note = QLabel("Tip: You can also use the Home tab later to switch workflows.")
+        note = QLabel(
+            t("welcome_tip")
+        )
         note.setAlignment(Qt.AlignmentFlag.AlignCenter)
         note.setStyleSheet("color: #7A8D96; font-size: 12px;")
         layout.addWidget(note)
@@ -327,7 +399,7 @@ class MainWindow(QMainWindow):
 
 
     def _create_quick_toolbar(self) -> None:
-        toolbar = QToolBar("Quick Actions", self)
+        toolbar = QToolBar(t("quick_actions"), self)
         toolbar.setMovable(False)
         toolbar.setStyleSheet("""
             QToolBar {
@@ -359,32 +431,44 @@ class MainWindow(QMainWindow):
         """)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
 
-        open_pdfs_action = QAction("Open PDFs / Images", self)
+        home_action = QAction(t("home_button"), self)
+        home_action.setToolTip(t("home_tooltip"))
+        home_action.triggered.connect(self.show_home_tab)
+        toolbar.addAction(home_action)
+
+        self.toggle_settings_action = QAction(t("wide_view"), self)
+        self.toggle_settings_action.setToolTip(t("wide_view_tooltip"))
+        self.toggle_settings_action.triggered.connect(self.toggle_settings_panel)
+        toolbar.addAction(self.toggle_settings_action)
+
+        toolbar.addSeparator()
+
+        open_pdfs_action = QAction(t("open_pdfs_images"), self)
         open_pdfs_action.triggered.connect(self.open_pdfs)
         toolbar.addAction(open_pdfs_action)
 
-        go_to_page_action = QAction("Go Page", self)
-        go_to_page_action.setToolTip("Go to page (Ctrl+G)")
+        go_to_page_action = QAction(t("go_page"), self)
+        go_to_page_action.setToolTip(t("go_to_page_tooltip"))
         go_to_page_action.triggered.connect(self.go_to_page_dialog)
         toolbar.addAction(go_to_page_action)
 
-        find_text_action = QAction("Find", self)
-        find_text_action.setToolTip("Find text (Ctrl+F)")
+        find_text_action = QAction(t("find"), self)
+        find_text_action.setToolTip(t("find_text_tooltip"))
         find_text_action.triggered.connect(self.find_text_dialog)
         toolbar.addAction(find_text_action)
 
         toolbar.addSeparator()
 
-        self.auto_current_action = QAction("Auto Current", self)
+        self.auto_current_action = QAction(t("auto_current"), self)
         self.auto_current_action.triggered.connect(self.auto_select_content)
         toolbar.addAction(self.auto_current_action)
 
-        self.auto_all_action = QAction("Auto All", self)
+        self.auto_all_action = QAction(t("auto_all"), self)
         self.auto_all_action.triggered.connect(self.auto_select_all_pages)
         self.auto_all_action.setObjectName("autoSelectAllPagesAction")
         toolbar.addAction(self.auto_all_action)
 
-        self.auto_range_action = QAction("Auto Range", self)
+        self.auto_range_action = QAction(t("auto_range"), self)
         self.auto_range_action.triggered.connect(self.auto_select_page_range)
         toolbar.addAction(self.auto_range_action)
 
@@ -392,24 +476,24 @@ class MainWindow(QMainWindow):
         if auto_all_button is not None:
             auto_all_button.setObjectName("autoSelectAllPagesButton")
 
-        clear_all_action = QAction("Clear Selections", self)
+        clear_all_action = QAction(t("clear_selections"), self)
         clear_all_action.triggered.connect(self.clear_all_selections)
         toolbar.addAction(clear_all_action)
 
         toolbar.addSeparator()
 
-        create_poster_action = QAction("Poster PDF", self)
-        create_poster_action.setToolTip("Create a tiled poster PDF")
+        create_poster_action = QAction(t("poster_pdf"), self)
+        create_poster_action.setToolTip(t("create_tiled_poster_pdf_tooltip"))
         create_poster_action.triggered.connect(self.create_poster_pdf)
         toolbar.addAction(create_poster_action)
 
-        create_single_page_action = QAction("Single Page PDF", self)
-        create_single_page_action.setToolTip("Create clean single-page PDF output")
+        create_single_page_action = QAction(t("single_page_pdf"), self)
+        create_single_page_action.setToolTip(t("create_single_page_pdf_tooltip"))
         create_single_page_action.triggered.connect(self.create_single_page_pdf)
         toolbar.addAction(create_single_page_action)
 
-        open_exports_folder_action = QAction("Exports Folder", self)
-        open_exports_folder_action.setToolTip("Open the exports folder")
+        open_exports_folder_action = QAction(t("exports_folder"), self)
+        open_exports_folder_action.setToolTip(t("open_exports_folder_tooltip"))
         open_exports_folder_action.triggered.connect(self.open_exports_folder)
         toolbar.addAction(open_exports_folder_action)
 
@@ -417,86 +501,89 @@ class MainWindow(QMainWindow):
     def _create_menus(self) -> None:
         menu_bar = self.menuBar()
 
-        self.file_menu = menu_bar.addMenu("File")
-        edit_menu = menu_bar.addMenu("Edit")
-        view_menu = menu_bar.addMenu("View")
-        help_menu = menu_bar.addMenu("Help")
+        self.file_menu = menu_bar.addMenu(t("menu_file"))
+        edit_menu = menu_bar.addMenu(t("menu_edit"))
+        view_menu = menu_bar.addMenu(t("menu_view"))
+        help_menu = menu_bar.addMenu(t("menu_help"))
 
         # File
-        self.file_menu.addAction("New Project", self.new_project)
-        self.file_menu.addAction("Open Project", self.open_project)
-        self.file_menu.addAction("Save Project", self.save_project)
-        self.file_menu.addAction("Save Project As", self.save_project_as)
+        self.file_menu.addAction(t("menu_new_project"), self.new_project)
+        self.file_menu.addAction(t("menu_open_project"), self.open_project)
+        self.file_menu.addAction(t("menu_save_project"), self.save_project)
+        self.file_menu.addAction(t("menu_save_project_as"), self.save_project_as)
         self.file_menu.addSeparator()
 
-        self.recent_projects_menu = self.file_menu.addMenu("Recent Projects")
+        self.recent_projects_menu = self.file_menu.addMenu(t("menu_recent_projects"))
         self.file_menu.addSeparator()
 
-        open_pdfs_action = self.file_menu.addAction("Open PDFs / Images", self.open_pdfs)
+        open_pdfs_action = self.file_menu.addAction(t("open_pdfs_images"), self.open_pdfs)
         open_pdfs_action.setShortcut(QKeySequence("Ctrl+O"))
 
-        export_pdf_action = self.file_menu.addAction("Export PDF", self.export_print_pdf)
+        export_pdf_action = self.file_menu.addAction(t("menu_export_pdf"), self.export_print_pdf)
         export_pdf_action.setShortcut(QKeySequence("Ctrl+E"))
 
-        open_last_exported_action = self.file_menu.addAction("Open Last Exported PDF", self.open_last_exported_pdf)
+        open_last_exported_action = self.file_menu.addAction(t("menu_open_last_exported_pdf"), self.open_last_exported_pdf)
         open_last_exported_action.setShortcut(QKeySequence("Ctrl+L"))
 
         print_action = self.file_menu.addAction("Print", self.print_pdf)
         print_action.setShortcut(QKeySequence("Ctrl+P"))
         self.file_menu.addSeparator()
-        self.file_menu.addAction("Exit", self.close)
+        self.file_menu.addAction(t("menu_exit"), self.close)
 
         # Edit
-        self.undo_action = edit_menu.addAction("Undo", self.undo)
+        self.undo_action = edit_menu.addAction(t("undo"), self.undo)
         self.undo_action.setShortcut(QKeySequence("Ctrl+Z"))
         self.undo_action.setEnabled(False)
 
-        self.redo_action = edit_menu.addAction("Redo", self.redo)
+        self.redo_action = edit_menu.addAction(t("redo"), self.redo)
         self.redo_action.setShortcut(QKeySequence("Ctrl+Y"))
         self.redo_action.setEnabled(False)
 
-        self.redo_alt_action = QAction("Redo Alternative", self)
+        self.redo_alt_action = QAction(t("redo_alternative"), self)
         self.redo_alt_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
         self.redo_alt_action.triggered.connect(self.redo)
         self.addAction(self.redo_alt_action)
 
         edit_menu.addSeparator()
-        edit_menu.addAction("Clear Selection", self.clear_selection)
-        edit_menu.addAction("Apply Selection to All Pages", self.apply_selection_to_all_pages)
+        edit_menu.addAction(t("clear_selection"), self.clear_selection)
+        edit_menu.addAction(t("apply_selection_all"), self.apply_selection_to_all_pages)
 
         # View
-        view_menu.addAction("Previous Page", self.previous_page)
-        view_menu.addAction("Next Page", self.next_page)
+        view_menu.addAction(t("previous_page"), self.previous_page)
+        view_menu.addAction(t("next_page"), self.next_page)
 
-        go_to_page_action = view_menu.addAction("Go to Page", self.go_to_page_dialog)
+        go_to_page_action = view_menu.addAction(t("go_to_page"), self.go_to_page_dialog)
         go_to_page_action.setShortcut(QKeySequence("Ctrl+G"))
 
-        find_text_action = view_menu.addAction("Find Text", self.find_text_dialog)
+        find_text_action = view_menu.addAction(t("find_text"), self.find_text_dialog)
         find_text_action.setShortcut(QKeySequence("Ctrl+F"))
 
-        find_next_action = view_menu.addAction("Find Next", self.find_next_text)
+        find_next_action = view_menu.addAction(t("find_next"), self.find_next_text)
         find_next_action.setShortcut(QKeySequence("F3"))
 
         view_menu.addSeparator()
-        view_menu.addAction("Zoom In", self.zoom_in)
-        view_menu.addAction("Zoom Out", self.zoom_out)
-        view_menu.addAction("Fit Page", self.fit_page)
-        view_menu.addAction("Actual Size", self.actual_size)
+        view_menu.addAction(t("zoom_in"), self.zoom_in)
+        view_menu.addAction(t("zoom_out"), self.zoom_out)
+        view_menu.addAction(t("fit_page"), self.fit_page)
+        view_menu.addAction(t("actual_size"), self.actual_size)
         view_menu.addSeparator()
-        view_menu.addAction("Rotate Left", self.rotate_left)
-        view_menu.addAction("Rotate Right", self.rotate_right)
-        view_menu.addAction("Reset Rotation", self.reset_rotation)
+        view_menu.addAction(t("rotate_left"), self.rotate_left)
+        view_menu.addAction(t("rotate_right"), self.rotate_right)
+        view_menu.addAction(t("reset_rotation"), self.reset_rotation)
         view_menu.addSeparator()
         view_menu.addAction("Auto Select Current Page", self.auto_select_content)
-        view_menu.addAction("Auto Select All Pages", self.auto_select_all_pages)
+        view_menu.addAction(t("auto_select_all_pages"), self.auto_select_all_pages)
         view_menu.addSeparator()
-        view_menu.addAction("Show Log Panel", self.show_log_panel)
+        view_menu.addAction(t("show_log_panel"), self.show_log_panel)
 
         # Help
-        help_menu.addAction("User Guide / How to Use", self.show_user_guide)
-        help_menu.addAction("Release Notes", self.show_release_notes)
+        help_menu.addAction(t("user_guide"), self.show_user_guide)
+        help_menu.addAction(t("release_notes"), self.show_release_notes)
+        help_menu.addAction(t("send_feedback"), self.send_feedback)
         help_menu.addSeparator()
-        help_menu.addAction("About Program", self.show_about)
+        help_menu.addAction(t("language_settings"), self.show_language_settings)
+        help_menu.addAction(t("ocr_settings"), self.show_ocr_settings)
+        help_menu.addAction(t("about_program"), self.show_about)
     def _make_history_snapshot(self) -> dict:
         selections = {}
         for page_index, rect in self.page_selections.items():
@@ -633,7 +720,7 @@ class MainWindow(QMainWindow):
         paths = self.recent_projects.load()
 
         if not paths:
-            action = self.recent_projects_menu.addAction("No Recent Projects")
+            action = self.recent_projects_menu.addAction(t("no_recent_projects"))
             action.setEnabled(False)
             return
 
@@ -799,8 +886,8 @@ class MainWindow(QMainWindow):
         export_order = self._serialize_export_order()
 
         return {
-            "app": "PDF Poster Studio",
-            "version": "0.9.6",
+            "app": t("app_title"),
+            "version": "0.9.7",
             "saved_at": datetime.now().isoformat(timespec="seconds"),
 
             # Legacy/single-PDF compatibility fields.
@@ -996,7 +1083,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "Open Project Error",
+                t("open_project_error"),
                 f"Failed to open project.\n\n{exc}"
             )
             self._log(f"Open project error: {exc}")
@@ -1007,8 +1094,8 @@ class MainWindow(QMainWindow):
 
         result = QMessageBox.question(
             self,
-            "Unsaved Changes",
-            "There are unsaved changes. Continue without saving?",
+            t("unsaved_changes"),
+            t("unsaved_continue"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
 
@@ -1035,9 +1122,9 @@ class MainWindow(QMainWindow):
 
         nav_layout = QHBoxLayout()
 
-        self.prev_button = QPushButton("Previous")
-        self.next_button = QPushButton("Next")
-        self.page_label = QLabel("Page: - / -")
+        self.prev_button = QPushButton(t("previous"))
+        self.next_button = QPushButton(t("next"))
+        self.page_label = QLabel(t("page_empty"))
         self.page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.page_complete_check = QCheckBox("Use this page for export")
@@ -1064,63 +1151,63 @@ class MainWindow(QMainWindow):
         settings_area = QWidget()
         settings_layout = QVBoxLayout(settings_area)
 
-        title = QLabel("Basic Settings")
+        title = QLabel(t("basic_settings"))
         title.setStyleSheet("font-size: 16px; font-weight: bold;")
 
-        self.pdf_path_label = QLabel("PDF: Not selected")
+        self.pdf_path_label = QLabel(t("pdf_not_selected"))
         self.pdf_path_label.setWordWrap(True)
         self.pdf_path_label.setMaximumHeight(48)
 
-        self.pdf_info_label = QLabel("Pages: -")
-        self.render_info_label = QLabel("Preview: Not rendered")
-        self.zoom_info_label = QLabel("Zoom: Fit Page")
-        self.rotation_info_label = QLabel("Rotation: 0°")
-        self.selection_info_label = QLabel("Selection: None")
-        self.checked_pages_label = QLabel("Checked pages: 0")
-        self.mode_label = QLabel("Mode: Basic")
+        self.pdf_info_label = QLabel(t("pages_empty"))
+        self.render_info_label = QLabel(t("preview_not_rendered"))
+        self.zoom_info_label = QLabel(t("zoom_fit_page"))
+        self.rotation_info_label = QLabel(t("rotation_zero"))
+        self.selection_info_label = QLabel(t("selection_none"))
+        self.checked_pages_label = QLabel(t("checked_pages_zero"))
+        self.mode_label = QLabel(t("mode_basic"))
 
         self.export_type_combo = QComboBox()
-        self.export_type_combo.addItem("Poster Print Mode", "a3_split")
-        self.export_type_combo.addItem("Single Page Mode", "selection_only")
+        self.export_type_combo.addItem(t("poster_print_mode"), "a3_split")
+        self.export_type_combo.addItem(t("single_page_mode"), "selection_only")
         self.export_type_combo.currentIndexChanged.connect(self.update_export_option_states)
 
         self.output_area_combo = QComboBox()
-        self.output_area_combo.addItem("Whole Page", "whole_page")
-        self.output_area_combo.addItem("Selected Area", "selected_area")
+        self.output_area_combo.addItem(t("whole_page"), "whole_page")
+        self.output_area_combo.addItem(t("selected_area"), "selected_area")
         self.output_area_combo.setCurrentIndex(0)
         self.output_area_combo.currentIndexChanged.connect(self.update_output_area_states)
         self.output_area_combo.currentIndexChanged.connect(self.update_action_summary)
 
         self.selection_fit_mode_combo = QComboBox()
-        self.selection_fit_mode_combo.addItem("Fit Width", "fit_width")
-        self.selection_fit_mode_combo.addItem("Fit Whole Area", "fit_whole")
-        self.selection_fit_mode_combo.addItem("Fill Page Crop", "fill_crop")
-        self.selection_fit_mode_combo.addItem("Fit Height", "fit_height")
+        self.selection_fit_mode_combo.addItem(t("fit_width"), "fit_width")
+        self.selection_fit_mode_combo.addItem(t("fit_whole_area"), "fit_whole")
+        self.selection_fit_mode_combo.addItem(t("fill_page_crop"), "fill_crop")
+        self.selection_fit_mode_combo.addItem(t("fit_height"), "fit_height")
 
         self.page_orientation_combo = QComboBox()
-        self.page_orientation_combo.addItem("Auto", "auto")
-        self.page_orientation_combo.addItem("Portrait", "portrait")
-        self.page_orientation_combo.addItem("Landscape", "landscape")
+        self.page_orientation_combo.addItem(t("auto"), "auto")
+        self.page_orientation_combo.addItem(t("portrait"), "portrait")
+        self.page_orientation_combo.addItem(t("landscape"), "landscape")
 
         self.export_quality_combo = QComboBox()
-        self.export_quality_combo.addItem("Standard", 1.5)
-        self.export_quality_combo.addItem("High", 2.5)
-        self.export_quality_combo.addItem("Very High", 3.5)
+        self.export_quality_combo.addItem(t("standard"), 1.5)
+        self.export_quality_combo.addItem(t("high"), 2.5)
+        self.export_quality_combo.addItem(t("very_high"), 3.5)
         self.export_quality_combo.setCurrentIndex(1)
         # Kept internally for backward compatibility. Current vector-based PDF export
         # usually preserves original PDF quality without raster quality scaling.
 
         self.batch_output_combo = QComboBox()
-        self.batch_output_combo.addItem("One PDF", "single_pdf")
-        self.batch_output_combo.addItem("Separate PDF per selected page", "separate_pdf_per_page")
+        self.batch_output_combo.addItem(t("one_pdf"), "single_pdf")
+        self.batch_output_combo.addItem(t("separate_pdf_per_page"), "separate_pdf_per_page")
         self.batch_output_combo.currentIndexChanged.connect(self.update_action_summary)
         self.batch_output_combo.setCurrentIndex(0)
         self.batch_output_combo.setVisible(True)
 
         self.print_quality_combo = QComboBox()
-        self.print_quality_combo.addItem("Fast 150 DPI", 150)
-        self.print_quality_combo.addItem("Standard 300 DPI", 300)
-        self.print_quality_combo.addItem("High 600 DPI", 600)
+        self.print_quality_combo.addItem(t("fast_150_dpi"), 150)
+        self.print_quality_combo.addItem(t("standard_300_dpi"), 300)
+        self.print_quality_combo.addItem(t("high_600_dpi"), 600)
         self.print_quality_combo.setCurrentIndex(1)
 
         self.auto_select_sensitivity_combo = QComboBox()
@@ -1129,28 +1216,28 @@ class MainWindow(QMainWindow):
         self.auto_select_sensitivity_combo.addItem("Sensitive", 252)
         self.auto_select_sensitivity_combo.setCurrentIndex(1)
         self.output_mode_combo = QComboBox()
-        self.output_mode_combo.addItem("Fit with Margins", "no_cut")
-        self.output_mode_combo.addItem("Overlap for Taping", "overlap")
-        self.output_mode_combo.addItem("True Scale", "true_size")
+        self.output_mode_combo.addItem(t("fit_with_margins"), "no_cut")
+        self.output_mode_combo.addItem(t("overlap_for_taping"), "overlap")
+        self.output_mode_combo.addItem(t("true_scale"), "true_size")
 
         self.split_layout_combo = QComboBox()
-        self.split_layout_combo.addItem("Left-Right", "left_right")
-        self.split_layout_combo.addItem("Top-Bottom", "top_bottom")
+        self.split_layout_combo.addItem(t("left_right"), "left_right")
+        self.split_layout_combo.addItem(t("top_bottom"), "top_bottom")
         self.split_layout_combo.currentIndexChanged.connect(self.update_poster_sheet_estimate)
 
         self.paper_size_combo = QComboBox()
         self.paper_size_combo.addItem("A4", "a4")
-        self.paper_size_combo.addItem("US Letter", "letter")
+        self.paper_size_combo.addItem(t("us_letter"), "letter")
         self.paper_size_combo.currentIndexChanged.connect(self.update_poster_sheet_estimate)
 
         self.poster_size_preset_combo = QComboBox()
-        self.poster_size_preset_combo.addItem("Manual / Custom", None)
+        self.poster_size_preset_combo.addItem(t("manual_custom"), None)
 
         # Hobby presets respect the currently selected Output Paper Size.
-        self.poster_size_preset_combo.addItem("Poster Small - 2 sheets", {"scale": 141, "sheets": 2})
-        self.poster_size_preset_combo.addItem("Poster Medium - 4 sheets", {"scale": 200, "sheets": 4})
-        self.poster_size_preset_combo.addItem("Poster Large - 8 sheets", {"scale": 283, "sheets": 8})
-        self.poster_size_preset_combo.addItem("Poster Huge - 16 sheets", {"scale": 400, "sheets": 16})
+        self.poster_size_preset_combo.addItem(t("poster_small_2"), {"scale": 141, "sheets": 2})
+        self.poster_size_preset_combo.addItem(t("poster_medium_4"), {"scale": 200, "sheets": 4})
+        self.poster_size_preset_combo.addItem(t("poster_large_8"), {"scale": 283, "sheets": 8})
+        self.poster_size_preset_combo.addItem(t("poster_huge_16"), {"scale": 400, "sheets": 16})
 
         self.poster_size_preset_combo.addItem("A3 from A4 - 141%", {"scale": 141, "paper_size": "a4"})
         self.poster_size_preset_combo.addItem("A2 from A4 - 200%", {"scale": 200, "paper_size": "a4"})
@@ -1175,12 +1262,12 @@ class MainWindow(QMainWindow):
         self.poster_scale_spin.setValue(100)
         self.poster_scale_spin.valueChanged.connect(self.on_poster_scale_changed)
 
-        self.poster_sheet_estimate_label = QLabel("Estimated Sheets: -")
+        self.poster_sheet_estimate_label = QLabel(t("estimated_sheets_empty"))
         self.poster_sheet_estimate_label.setWordWrap(True)
         self.poster_sheet_estimate_label.setMinimumHeight(44)
         self.poster_sheet_estimate_label.setStyleSheet("color: #395B64;")
 
-        self.tiling_preview_title = QLabel("Tiling Preview")
+        self.tiling_preview_title = QLabel(t("tiling_preview"))
         self.tiling_preview_title.setStyleSheet("font-weight: 700; color: #395B64;")
 
         self.tiling_preview_label = QLabel("-")
@@ -1197,46 +1284,46 @@ class MainWindow(QMainWindow):
             }
         """)
 
-        self.numbering_check = QCheckBox("Show sheet numbers")
+        self.numbering_check = QCheckBox(t("show_sheet_numbers"))
         self.numbering_check.setChecked(True)
 
-        self.cut_guides_check = QCheckBox("Show cut guide lines")
+        self.cut_guides_check = QCheckBox(t("show_cut_guide_lines"))
         self.cut_guides_check.setChecked(True)
 
-        open_pdf_button = QPushButton("Open PDFs / Images")
+        open_pdf_button = QPushButton(t("open_pdfs_images"))
         open_pdf_button.clicked.connect(self.open_pdfs)
 
-        zoom_in_button = QPushButton("Zoom In")
+        zoom_in_button = QPushButton(t("zoom_in"))
         zoom_in_button.clicked.connect(self.zoom_in)
 
-        zoom_out_button = QPushButton("Zoom Out")
+        zoom_out_button = QPushButton(t("zoom_out"))
         zoom_out_button.clicked.connect(self.zoom_out)
 
         auto_select_button = QPushButton("Auto Select Current Page")
         auto_select_button.clicked.connect(self.auto_select_content)
 
-        auto_select_all_button = QPushButton("Auto Select All Pages")
+        auto_select_all_button = QPushButton(t("auto_select_all_pages"))
         auto_select_all_button.clicked.connect(self.auto_select_all_pages)
 
-        rotate_left_button = QPushButton("Rotate Left")
+        rotate_left_button = QPushButton(t("rotate_left"))
         rotate_left_button.clicked.connect(self.rotate_left)
 
-        rotate_right_button = QPushButton("Rotate Right")
+        rotate_right_button = QPushButton(t("rotate_right"))
         rotate_right_button.clicked.connect(self.rotate_right)
 
-        reset_rotation_button = QPushButton("Reset View")
+        reset_rotation_button = QPushButton(t("reset_view"))
         reset_rotation_button.clicked.connect(self.reset_view)
 
-        fit_button = QPushButton("Fit Page")
+        fit_button = QPushButton(t("fit_page"))
         fit_button.clicked.connect(self.fit_page)
 
-        actual_button = QPushButton("Actual Size")
+        actual_button = QPushButton(t("actual_size"))
         actual_button.clicked.connect(self.actual_size)
 
-        clear_selection_button = QPushButton("Clear Selection")
+        clear_selection_button = QPushButton(t("clear_selection"))
         clear_selection_button.clicked.connect(self.clear_selection)
 
-        apply_all_button = QPushButton("Apply Selection to All Pages")
+        apply_all_button = QPushButton(t("apply_selection_all"))
         apply_all_button.clicked.connect(self.apply_selection_to_all_pages)
 
         # Collapsible floating toolbar over the preview area for frequent view controls.
@@ -1273,35 +1360,35 @@ class MainWindow(QMainWindow):
         floating_layout.setSpacing(4)
 
         self.preview_floating_toggle_button = QPushButton("View ▸")
-        self.preview_floating_toggle_button.setToolTip("Show or hide preview view controls")
+        self.preview_floating_toggle_button.setToolTip(t("preview_controls_tooltip"))
         self.preview_floating_toggle_button.clicked.connect(self.toggle_preview_floating_toolbar)
 
         floating_zoom_out_button = QPushButton("−")
-        floating_zoom_out_button.setToolTip("Zoom Out")
+        floating_zoom_out_button.setToolTip(t("zoom_out"))
         floating_zoom_out_button.clicked.connect(self.zoom_out)
 
         floating_zoom_in_button = QPushButton("+")
-        floating_zoom_in_button.setToolTip("Zoom In")
+        floating_zoom_in_button.setToolTip(t("zoom_in"))
         floating_zoom_in_button.clicked.connect(self.zoom_in)
 
         floating_fit_button = QPushButton("Fit")
-        floating_fit_button.setToolTip("Fit Page")
+        floating_fit_button.setToolTip(t("fit_page"))
         floating_fit_button.clicked.connect(self.fit_page)
 
         floating_actual_button = QPushButton("1:1")
-        floating_actual_button.setToolTip("Actual Size")
+        floating_actual_button.setToolTip(t("actual_size"))
         floating_actual_button.clicked.connect(self.actual_size)
 
         floating_rotate_left_button = QPushButton("⟲")
-        floating_rotate_left_button.setToolTip("Rotate Left")
+        floating_rotate_left_button.setToolTip(t("rotate_left"))
         floating_rotate_left_button.clicked.connect(self.rotate_left)
 
         floating_rotate_right_button = QPushButton("⟳")
-        floating_rotate_right_button.setToolTip("Rotate Right")
+        floating_rotate_right_button.setToolTip(t("rotate_right"))
         floating_rotate_right_button.clicked.connect(self.rotate_right)
 
         floating_reset_button = QPushButton("Reset")
-        floating_reset_button.setToolTip("Reset View: Fit Page, Zoom, and Rotation")
+        floating_reset_button.setToolTip(t("reset_view_tooltip"))
         floating_reset_button.clicked.connect(self.reset_view)
 
         self.preview_floating_buttons = [
@@ -1325,7 +1412,7 @@ class MainWindow(QMainWindow):
         self.preview_floating_toolbar.raise_()
         self.preview_floating_toolbar.show()
 
-        export_button = QPushButton("Create PDF")
+        export_button = QPushButton(t("create_pdf"))
         export_button.clicked.connect(self.export_print_pdf)
         export_button.setStyleSheet("font-weight: bold;")
 
@@ -1333,12 +1420,12 @@ class MainWindow(QMainWindow):
         home_layout = QVBoxLayout(home_tab)
         home_layout.setSpacing(10)
 
-        home_title = QLabel("What do you want to do?")
+        home_title = QLabel(t("welcome_prompt"))
         home_title.setStyleSheet("font-size: 16px; font-weight: 800; color: #395B64;")
         home_layout.addWidget(home_title)
 
         home_help = QLabel(
-            "Choose a task below. The app will set the main options for that workflow."
+            t("home_help")
         )
         home_help.setWordWrap(True)
         home_help.setStyleSheet("color: #5F6F7A;")
@@ -1387,32 +1474,32 @@ class MainWindow(QMainWindow):
             home_layout.addWidget(card)
 
         add_task_card(
-            "Merge PDFs",
-            "Combine full pages from multiple PDFs/images into one PDF.",
+            t("merge_pdfs"),
+            t("merge_pdfs_desc"),
             self.task_merge_pdfs,
         )
 
         add_task_card(
-            "Extract Pages",
-            "Use full pages and export only the pages you choose.",
+            t("extract_pages"),
+            t("extract_pages_desc"),
             self.task_extract_pages,
         )
 
         add_task_card(
-            "Make Poster",
-            "Tile a map, poster, image, or drawing across A4/US Letter sheets.",
+            t("make_poster"),
+            t("make_poster_desc"),
             self.task_make_poster,
         )
 
         add_task_card(
-            "Rotate Pages",
-            "Rotate pages in preview and save the rotated result as a new PDF.",
+            t("rotate_pages"),
+            t("rotate_pages_desc"),
             self.task_rotate_pages,
         )
 
         add_task_card(
-            "Selected Area PDF",
-            "Select part of a PDF/image and export only that area.",
+            t("selected_area_pdf"),
+            t("selected_area_pdf_desc"),
             self.task_selected_area_pdf,
         )
 
@@ -1428,7 +1515,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.selection_info_label)
         status_layout.addWidget(self.checked_pages_label)
 
-        status_layout.addWidget(QLabel("Source PDFs"))
+        status_layout.addWidget(QLabel(t("source_pdfs")))
 
         self.workspace_pdf_list = QListWidget()
         self.workspace_pdf_list.setMinimumHeight(120)
@@ -1440,18 +1527,18 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.workspace_pdf_list)
 
         workspace_button_layout = QHBoxLayout()
-        add_workspace_button = QPushButton("Add PDFs")
+        add_workspace_button = QPushButton(t("add_pdfs"))
         add_workspace_button.clicked.connect(self.add_pdfs_to_workspace)
-        remove_workspace_button = QPushButton("Remove")
+        remove_workspace_button = QPushButton(t("remove"))
         remove_workspace_button.clicked.connect(self.remove_selected_workspace_pdf)
         workspace_button_layout.addWidget(add_workspace_button)
         workspace_button_layout.addWidget(remove_workspace_button)
         status_layout.addLayout(workspace_button_layout)
 
-        status_layout.addWidget(QLabel("Print Order"))
+        status_layout.addWidget(QLabel(t("print_order")))
 
         self.print_order_help_label = QLabel(
-            "Thumbnails show source pages. Double-click an item to review the exact selected area."
+            t("source_pdfs_help")
         )
         self.print_order_help_label.setWordWrap(True)
         self.print_order_help_label.setStyleSheet("color: #5F6F7A;")
@@ -1469,13 +1556,13 @@ class MainWindow(QMainWindow):
 
         export_order_button_layout = QHBoxLayout()
 
-        refresh_export_order_button = QPushButton("Build Print Order")
+        refresh_export_order_button = QPushButton(t("build_print_order"))
         refresh_export_order_button.clicked.connect(self.refresh_export_order_from_checked_pages)
 
-        export_order_up_button = QPushButton("Move Up")
+        export_order_up_button = QPushButton(t("move_up"))
         export_order_up_button.clicked.connect(self.move_export_order_item_up)
 
-        export_order_down_button = QPushButton("Move Down")
+        export_order_down_button = QPushButton(t("move_down"))
         export_order_down_button.clicked.connect(self.move_export_order_item_down)
 
         export_order_button_layout.addWidget(refresh_export_order_button)
@@ -1483,7 +1570,7 @@ class MainWindow(QMainWindow):
         export_order_button_layout.addWidget(export_order_down_button)
         status_layout.addLayout(export_order_button_layout)
 
-        status_layout.addWidget(QLabel("Pages for Export"))
+        status_layout.addWidget(QLabel(t("pages_for_export")))
 
         self.page_list_widget = QListWidget()
         self.page_list_widget.setMinimumHeight(260)
@@ -1525,57 +1612,55 @@ class MainWindow(QMainWindow):
 
         export_tab = QWidget()
         export_layout = QVBoxLayout(export_tab)
-        export_layout.addWidget(QLabel("Export Type"))
+        export_layout.addWidget(QLabel(t("export_type")))
         export_layout.addWidget(self.export_type_combo)
 
-        export_layout.addWidget(QLabel("Output Area"))
+        export_layout.addWidget(QLabel(t("output_area")))
         export_layout.addWidget(self.output_area_combo)
 
         self.output_area_help_label = QLabel(
-            "Whole Page does not require area selection.\n"
-            "Selected Area uses the area you select in the preview."
+            t("output_area_help")
         )
         self.output_area_help_label.setWordWrap(True)
         self.output_area_help_label.setStyleSheet("color: #5F6F7A;")
         export_layout.addWidget(self.output_area_help_label)
 
-        self.export_quality_label = QLabel("Export Quality")
+        self.export_quality_label = QLabel(t("export_quality"))
         self.export_quality_label.setVisible(False)
         self.export_quality_combo.setVisible(False)
         export_layout.addWidget(self.export_quality_label)
         export_layout.addWidget(self.export_quality_combo)
-        self.batch_output_label = QLabel("Output Files")
+        self.batch_output_label = QLabel(t("output_files"))
         self.batch_output_label.setVisible(True)
         export_layout.addWidget(self.batch_output_label)
         export_layout.addWidget(self.batch_output_combo)
 
         self.output_files_help_label = QLabel(
-            "One PDF combines selected pages into one file.\n"
-            "Separate creates one PDF for each selected page."
+            t("output_files_help")
         )
         self.output_files_help_label.setWordWrap(True)
         self.output_files_help_label.setStyleSheet("color: #5F6F7A;")
         export_layout.addWidget(self.output_files_help_label)
-        export_layout.addWidget(QLabel("Print Quality"))
+        export_layout.addWidget(QLabel(t("print_quality")))
         export_layout.addWidget(self.print_quality_combo)
         export_layout.addSpacing(12)
         export_layout.addWidget(export_button)
         export_layout.addStretch()
         self.a3_split_group = QWidget()
         a3_layout = QVBoxLayout(self.a3_split_group)
-        self.output_mode_title = QLabel("Tiling Method")
-        self.split_layout_title = QLabel("Split Layout")
+        self.output_mode_title = QLabel(t("tiling_method"))
+        self.split_layout_title = QLabel(t("split_layout"))
         a3_layout.addWidget(self.output_mode_title)
         a3_layout.addWidget(self.output_mode_combo)
         a3_layout.addWidget(self.split_layout_title)
         a3_layout.addWidget(self.split_layout_combo)
 
         a3_layout.addSpacing(8)
-        a3_layout.addWidget(QLabel("Output Paper Size"))
+        a3_layout.addWidget(QLabel(t("output_paper_size")))
         a3_layout.addWidget(self.paper_size_combo)
-        a3_layout.addWidget(QLabel("Poster Size Preset"))
+        a3_layout.addWidget(QLabel(t("poster_size_preset")))
         a3_layout.addWidget(self.poster_size_preset_combo)
-        a3_layout.addWidget(QLabel("Poster Scale"))
+        a3_layout.addWidget(QLabel(t("poster_scale")))
         a3_layout.addWidget(self.poster_scale_spin)
         a3_layout.addWidget(self.poster_sheet_estimate_label)
         a3_layout.addWidget(self.tiling_preview_title)
@@ -1590,14 +1675,13 @@ class MainWindow(QMainWindow):
         selection_layout = QVBoxLayout(self.selection_only_group)
 
         self.single_page_help_label = QLabel(
-            "Used only for Single Page Mode.\n"
-            "Exports the selected area as clean single-page output."
+            t("single_page_help")
         )
         self.single_page_help_label.setWordWrap(True)
         self.single_page_help_label.setStyleSheet("color: #5F6F7A;")
 
-        self.selection_fit_mode_title = QLabel("Single Page Fit Mode")
-        self.page_orientation_title = QLabel("Page Orientation")
+        self.selection_fit_mode_title = QLabel(t("selection_fit_mode"))
+        self.page_orientation_title = QLabel(t("page_orientation"))
 
         selection_layout.addWidget(self.single_page_help_label)
         selection_layout.addWidget(self.selection_fit_mode_title)
@@ -1607,42 +1691,37 @@ class MainWindow(QMainWindow):
         selection_layout.addStretch()
 
         self.settings_tabs = QTabWidget()
-        self.settings_tabs.addTab(home_tab, "Home")
-        self.settings_tabs.addTab(status_tab, "Status")
+        self._home_tab = home_tab  # Home is opened from floating/toolbar button, not as a right-side tab.
+        self.settings_tabs.addTab(status_tab, t("status"))
+        self.settings_tabs.setCurrentIndex(0)  # Status first
         # View tab removed: view controls are available in the preview floating toolbar.
-        self.settings_tabs.addTab(export_tab, "Export")
-        self.settings_tabs.addTab(self.a3_split_group, "Poster Print")
-        self.settings_tabs.addTab(self.selection_only_group, "Single Page")
+        self.settings_tabs.addTab(export_tab, t("export"))
+        self.settings_tabs.addTab(self.a3_split_group, t("poster_print"))
+        self.settings_tabs.addTab(self.selection_only_group, t("single_page"))
 
         settings_layout.addWidget(title)
         settings_layout.addWidget(self.mode_label)
         settings_layout.addWidget(self.settings_tabs)
 
-        self.action_summary_label = QLabel(
-            "Print Order: 0 item(s) | Output: One PDF | Use toolbar buttons to create PDFs"
-        )
-        self.action_summary_label.setWordWrap(True)
-        self.action_summary_label.setStyleSheet(
-            "color: #395B64; background-color: #FFF8F0; "
-            "border: 1px solid #EADBC8; border-radius: 8px; padding: 6px;"
-        )
+        self.action_summary_label = QLabel("")
+        self.action_summary_label.setVisible(False)
+        self.action_summary_label.setMaximumHeight(0)
 
-        settings_layout.addWidget(self.action_summary_label)
 
         # Right settings panel is resizable through the main splitter.
         settings_area.setMinimumWidth(280)
         settings_area.setMaximumWidth(16777215)
 
-        settings_scroll = QScrollArea()
-        settings_scroll.setWidgetResizable(True)
-        settings_scroll.setWidget(settings_area)
-        settings_scroll.setMinimumWidth(300)
-        settings_scroll.setMaximumWidth(760)
+        self.settings_scroll = QScrollArea()
+        self.settings_scroll.setWidgetResizable(True)
+        self.settings_scroll.setWidget(settings_area)
+        self.settings_scroll.setMinimumWidth(300)
+        self.settings_scroll.setMaximumWidth(760)
 
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.main_splitter.setChildrenCollapsible(False)
         self.main_splitter.addWidget(preview_area)
-        self.main_splitter.addWidget(settings_scroll)
+        self.main_splitter.addWidget(self.settings_scroll)
 
         # Preview takes remaining space; settings panel can be resized by dragging.
         self.main_splitter.setStretchFactor(0, 1)
@@ -1888,7 +1967,7 @@ class MainWindow(QMainWindow):
 
         try:
             if self.page_count <= 0:
-                self.poster_sheet_estimate_label.setText("Estimated Sheets: -")
+                self.poster_sheet_estimate_label.setText(t("estimated_sheets_empty"))
                 self.update_tiling_preview()
                 return
 
@@ -1961,7 +2040,7 @@ class MainWindow(QMainWindow):
                 rect = self.page_selections.get(self.current_page_index, QRect())
 
             if rect.isNull() or rect.width() <= 0 or rect.height() <= 0:
-                self.poster_sheet_estimate_label.setText("Estimated Sheets: select an area first")
+                self.poster_sheet_estimate_label.setText(t("estimated_sheets_select_area"))
                 self.update_tiling_preview()
                 return
 
@@ -1970,7 +2049,7 @@ class MainWindow(QMainWindow):
             if paper == "letter":
                 page_w = 8.5 * 72
                 page_h = 11 * 72
-                paper_name = "US Letter"
+                paper_name = t("us_letter")
             else:
                 page_w = 210 * 72 / 25.4
                 page_h = 297 * 72 / 25.4
@@ -1999,7 +2078,7 @@ class MainWindow(QMainWindow):
             self.update_tiling_preview(cols=cols, rows=rows)
 
         except Exception as exc:
-            self.poster_sheet_estimate_label.setText("Estimated Sheets: -")
+            self.poster_sheet_estimate_label.setText(t("estimated_sheets_empty"))
             self.update_tiling_preview()
             self._log(f"Poster sheet estimate error: {exc}")
 
@@ -2099,7 +2178,7 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(
             self,
-            "Merge PDFs",
+            t("merge_pdfs"),
             f"Merge setup completed.\n\n"
             f"Pages added to Print Order: {total_added}\n\n"
             "Output Area: Whole Page\n"
@@ -2111,7 +2190,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "settings_tabs"):
             # Status tab is usually index 1 when Home exists.
             for index in range(self.settings_tabs.count()):
-                if self.settings_tabs.tabText(index) == "Status":
+                if self.settings_tabs.tabText(index) == t("status"):
                     self.settings_tabs.setCurrentIndex(index)
                     break
 
@@ -2172,7 +2251,7 @@ class MainWindow(QMainWindow):
 
         range_text, ok = QInputDialog.getText(
             self,
-            "Extract Pages",
+            t("extract_pages"),
             "Enter page range to extract from each source file:\n"
             "Examples: all, 1-10, 1,3,5, 10-20,35",
             text="all",
@@ -2189,14 +2268,14 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(
                 self,
-                "Extract Pages",
+                t("extract_pages"),
                 f"Invalid page range or extraction failed.\n\n{exc}"
             )
             return
 
         QMessageBox.information(
             self,
-            "Extract Pages",
+            t("extract_pages"),
             f"Extract setup completed.\n\n"
             f"Pages added to Print Order: {total_added}\n"
             f"Range: {range_text}\n\n"
@@ -2209,7 +2288,7 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "settings_tabs"):
             for index in range(self.settings_tabs.count()):
-                if self.settings_tabs.tabText(index) == "Status":
+                if self.settings_tabs.tabText(index) == t("status"):
                     self.settings_tabs.setCurrentIndex(index)
                     break
 
@@ -2221,12 +2300,9 @@ class MainWindow(QMainWindow):
     def open_one_source_file_for_poster(self) -> bool:
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Open One PDF or Image for Poster",
+            t("open_one_pdf_or_image_for_poster"),
             "",
-            "PDF and Image Files (*.pdf *.png *.jpg *.jpeg *.bmp *.webp);;"
-            "PDF Files (*.pdf);;"
-            "Image Files (*.png *.jpg *.jpeg *.bmp *.webp);;"
-            "All Files (*)"
+            t("all_files")
         )
 
         if not file_path:
@@ -2265,9 +2341,9 @@ class MainWindow(QMainWindow):
 
         if has_sources:
             source_dialog = QMessageBox(self)
-            source_dialog.setWindowTitle("Make Poster")
+            source_dialog.setWindowTitle(t("make_poster"))
             source_dialog.setIcon(QMessageBox.Icon.Question)
-            source_dialog.setText("Choose source files for the poster.")
+            source_dialog.setText(t("choose_source_files_for_poster"))
             source_dialog.setInformativeText(
                 "Open One File is best for a single map, poster, image, or drawing.\n\n"
                 "Use Current Source PDFs keeps the files already loaded in Source PDFs."
@@ -2275,7 +2351,7 @@ class MainWindow(QMainWindow):
 
             open_one_button = source_dialog.addButton("Open One File", QMessageBox.ButtonRole.AcceptRole)
             use_current_button = source_dialog.addButton("Use Current Source PDFs", QMessageBox.ButtonRole.ActionRole)
-            cancel_button = source_dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+            cancel_button = source_dialog.addButton(t("cancel"), QMessageBox.ButtonRole.RejectRole)
 
             source_dialog.setDefaultButton(open_one_button)
             source_dialog.exec()
@@ -2302,17 +2378,17 @@ class MainWindow(QMainWindow):
         self._set_combo_by_data_if_exists("export_type_combo", "a3_split")
 
         area_dialog = QMessageBox(self)
-        area_dialog.setWindowTitle("Make Poster")
+        area_dialog.setWindowTitle(t("make_poster"))
         area_dialog.setIcon(QMessageBox.Icon.Question)
-        area_dialog.setText("What area do you want to use for the poster?")
+        area_dialog.setText(t("what_area_for_poster"))
         area_dialog.setInformativeText(
             "Whole Page uses the full page or image.\n\n"
             "Selected Area uses only the area you select in the preview."
         )
 
-        whole_button = area_dialog.addButton("Use Whole Page", QMessageBox.ButtonRole.AcceptRole)
-        selected_button = area_dialog.addButton("Use Selected Area", QMessageBox.ButtonRole.ActionRole)
-        cancel_button = area_dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        whole_button = area_dialog.addButton(t("use_whole_page"), QMessageBox.ButtonRole.AcceptRole)
+        selected_button = area_dialog.addButton(t("use_selected_area"), QMessageBox.ButtonRole.ActionRole)
+        cancel_button = area_dialog.addButton(t("cancel"), QMessageBox.ButtonRole.RejectRole)
 
         area_dialog.setDefaultButton(whole_button)
         area_dialog.exec()
@@ -2346,7 +2422,7 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(
             self,
-            "Make Poster",
+            t("make_poster"),
             area_message
         )
 
@@ -2366,13 +2442,13 @@ class MainWindow(QMainWindow):
                 return
 
         target_dialog = QMessageBox(self)
-        target_dialog.setWindowTitle("Rotate Pages")
+        target_dialog.setWindowTitle(t("rotate_pages"))
         target_dialog.setText("Which pages do you want to rotate?")
 
-        current_button = target_dialog.addButton("Current Page", QMessageBox.ButtonRole.AcceptRole)
-        checked_button = target_dialog.addButton("Checked Pages", QMessageBox.ButtonRole.ActionRole)
-        all_button = target_dialog.addButton("All Pages", QMessageBox.ButtonRole.ActionRole)
-        cancel_button = target_dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        current_button = target_dialog.addButton(t("current_page"), QMessageBox.ButtonRole.AcceptRole)
+        checked_button = target_dialog.addButton(t("checked_pages"), QMessageBox.ButtonRole.ActionRole)
+        all_button = target_dialog.addButton(t("all_pages"), QMessageBox.ButtonRole.ActionRole)
+        cancel_button = target_dialog.addButton(t("cancel"), QMessageBox.ButtonRole.RejectRole)
 
         target_dialog.exec()
         target_clicked = target_dialog.clickedButton()
@@ -2386,7 +2462,7 @@ class MainWindow(QMainWindow):
             if not self.checked_pages:
                 QMessageBox.information(
                     self,
-                    "Rotate Pages",
+                    t("rotate_pages"),
                     "No checked pages exist.\n\nCheck pages first or choose Current Page / All Pages."
                 )
                 return
@@ -2397,13 +2473,13 @@ class MainWindow(QMainWindow):
             return
 
         op_dialog = QMessageBox(self)
-        op_dialog.setWindowTitle("Rotate Pages")
+        op_dialog.setWindowTitle(t("rotate_pages"))
         op_dialog.setText(f"Rotation target: {len(target_pages)} page(s)\n\nChoose rotation operation.")
 
-        left_button = op_dialog.addButton("Rotate Left", QMessageBox.ButtonRole.AcceptRole)
-        right_button = op_dialog.addButton("Rotate Right", QMessageBox.ButtonRole.ActionRole)
-        reset_button = op_dialog.addButton("Reset Rotation", QMessageBox.ButtonRole.ActionRole)
-        cancel_button = op_dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        left_button = op_dialog.addButton(t("rotate_left"), QMessageBox.ButtonRole.AcceptRole)
+        right_button = op_dialog.addButton(t("rotate_right"), QMessageBox.ButtonRole.ActionRole)
+        reset_button = op_dialog.addButton(t("reset_rotation"), QMessageBox.ButtonRole.ActionRole)
+        cancel_button = op_dialog.addButton(t("cancel"), QMessageBox.ButtonRole.RejectRole)
 
         op_dialog.exec()
         op_clicked = op_dialog.clickedButton()
@@ -2463,13 +2539,13 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "settings_tabs"):
             for index in range(self.settings_tabs.count()):
-                if self.settings_tabs.tabText(index) == "Status":
+                if self.settings_tabs.tabText(index) == t("status"):
                     self.settings_tabs.setCurrentIndex(index)
                     break
 
         QMessageBox.information(
             self,
-            "Rotate Pages",
+            t("rotate_pages"),
             f"Rotation updated for {len(target_pages)} page(s).\n\n"
             "Print Order was prepared using Whole Page mode.\n"
             "Click Single Page PDF in the toolbar to save the rotated PDF."
@@ -2493,7 +2569,7 @@ class MainWindow(QMainWindow):
         self.update_action_summary()
 
         dialog = QMessageBox(self)
-        dialog.setWindowTitle("Selected Area PDF")
+        dialog.setWindowTitle(t("selected_area_pdf"))
         dialog.setIcon(QMessageBox.Icon.Question)
         dialog.setText("How do you want to select the area?")
         dialog.setInformativeText(
@@ -2502,8 +2578,8 @@ class MainWindow(QMainWindow):
         )
 
         auto_button = dialog.addButton("Auto Select Current Page", QMessageBox.ButtonRole.AcceptRole)
-        manual_button = dialog.addButton("Select Manually", QMessageBox.ButtonRole.ActionRole)
-        cancel_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        manual_button = dialog.addButton(t("select_manually"), QMessageBox.ButtonRole.ActionRole)
+        cancel_button = dialog.addButton(t("cancel"), QMessageBox.ButtonRole.RejectRole)
 
         dialog.setDefaultButton(auto_button)
         dialog.exec()
@@ -2520,8 +2596,8 @@ class MainWindow(QMainWindow):
             if self.page_count <= 0:
                 QMessageBox.information(
                     self,
-                    "Selected Area PDF",
-                    "Please open a PDF or image first."
+                    t("selected_area_pdf"),
+                    t("please_open_pdf_or_image_first")
                 )
                 return
 
@@ -2529,7 +2605,7 @@ class MainWindow(QMainWindow):
 
             QMessageBox.information(
                 self,
-                "Selected Area PDF",
+                t("selected_area_pdf"),
                 "Auto Select completed for the current page.\n\n"
                 "Click Build Print Order, then click Single Page PDF in the toolbar."
             )
@@ -2538,7 +2614,7 @@ class MainWindow(QMainWindow):
         if clicked == manual_button:
             QMessageBox.information(
                 self,
-                "Selected Area PDF",
+                t("selected_area_pdf"),
                 "Drag on the preview to select an area.\n\n"
                 "Then click Build Print Order and click Single Page PDF in the toolbar."
             )
@@ -2551,27 +2627,8 @@ class MainWindow(QMainWindow):
 
 
 
-    def update_action_summary(self) -> None:
-        if not hasattr(self, "action_summary_label"):
-            return
-
-        print_order_count = 0
-        if hasattr(self, "export_order_list"):
-            print_order_count = self.export_order_list.count()
-
-        output_text = "One PDF"
-        if hasattr(self, "batch_output_combo"):
-            output_text = self.batch_output_combo.currentText()
-
-        area_text = "Whole Page"
-        if hasattr(self, "output_area_combo"):
-            area_text = self.output_area_combo.currentText()
-
-        self.action_summary_label.setText(
-            f"Print Order: {print_order_count} item(s) | "
-            f"Output: {output_text} | Area: {area_text}\n"
-            f"Use toolbar: Create Poster PDF / Create Single Page PDF"
-        )
+    def update_action_summary(self):
+        return
 
 
     def update_output_area_states(self) -> None:
@@ -2581,8 +2638,7 @@ class MainWindow(QMainWindow):
             is_selected_area = self.output_area_combo.currentData() == "selected_area"
 
         disabled_tip = (
-            "Disabled because Output Area is Whole Page. "
-            "Choose Selected Area to use Auto Select."
+            t("auto_select_disabled_tip")
         )
         enabled_tip_current = "Automatically detect the content area on the current page."
         enabled_tip_all = "Automatically detect content areas on all pages."
@@ -2668,7 +2724,7 @@ class MainWindow(QMainWindow):
             self.log_text.append(message)
 
     def _update_checked_pages_label(self) -> None:
-        self.checked_pages_label.setText(f"Checked pages: {len(self.checked_pages)}")
+        self.checked_pages_label.setText(f"{t('checked_pages_label')}: {len(self.checked_pages)}")
 
     def _refresh_current_page_check_state(self) -> None:
         if not hasattr(self, "page_complete_check"):
@@ -2692,7 +2748,7 @@ class MainWindow(QMainWindow):
                     self.page_complete_check.blockSignals(False)
                     QMessageBox.warning(
                         self,
-                        "No Selection",
+                        t("no_selection"),
                         "Please select an area before checking this page, or choose Output Area = Whole Page."
                     )
                     return
@@ -2888,7 +2944,7 @@ class MainWindow(QMainWindow):
 
                 QMessageBox.warning(
                     self,
-                    "No Selection",
+                    t("no_selection"),
                     f"Page {page_index + 1} has no selection area. Choose Output Area = Whole Page to use the full page."
                 )
                 return
@@ -2996,11 +3052,11 @@ class MainWindow(QMainWindow):
 
     def _update_selection_info(self, rect: QRect) -> None:
         if rect.isNull() or rect.width() <= 0 or rect.height() <= 0:
-            self.selection_info_label.setText("Selection: None")
+            self.selection_info_label.setText(t("selection_none"))
             return
 
         self.selection_info_label.setText(
-            f"Selection: x={rect.x()}, y={rect.y()}, w={rect.width()}, h={rect.height()}"
+            f"{t('selection_label')}: x={rect.x()}, y={rect.y()}, w={rect.width()}, h={rect.height()}"
         )
 
     def _get_rotated_pixmap(self) -> QPixmap:
@@ -3040,32 +3096,27 @@ class MainWindow(QMainWindow):
 
             self.preview_label.set_preview_pixmap(scaled)
             self.render_info_label.setText(
-                f"Preview: Rendered, fitted {scaled.width()} x {scaled.height()}"
+                f"{t('preview_label')}: {t('rendered_label')}, {t('fitted_label')} {scaled.width()} x {scaled.height()}"
             )
-            self.zoom_info_label.setText("Zoom: Fit Page")
+            self.zoom_info_label.setText(t("zoom_fit_page"))
         else:
-            scaled_width = max(1, int(display_base.width() * self.preview_zoom_factor))
-            scaled_height = max(1, int(display_base.height() * self.preview_zoom_factor))
+            # PDF viewer mode:
+            # current_pixmap is already rendered at the requested zoom.
+            # Do not enlarge it again with QPixmap.scaled(), because that makes text blurry.
+            scaled = display_base
 
-            scaled = display_base.scaled(
-                scaled_width,
-                scaled_height,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-
-            self.current_display_scale_x = scaled.width() / display_base.width()
-            self.current_display_scale_y = scaled.height() / display_base.height()
+            self.current_display_scale_x = 1.0
+            self.current_display_scale_y = 1.0
 
             self.preview_label.set_preview_pixmap(scaled)
             self.render_info_label.setText(
-                f"Preview: Rendered, zoomed {scaled.width()} x {scaled.height()}"
+                f"{t('preview_label')}: {t('high_quality_label')} {scaled.width()} x {scaled.height()}"
             )
             self.zoom_info_label.setText(
-                f"Zoom: {int(self.preview_zoom_factor * 100)}%"
+                f"{t('zoom_label')}: {int(self.preview_zoom_factor * 100)}%"
             )
 
-        self.rotation_info_label.setText(f"Rotation: {self._get_current_rotation_degrees() % 360}°")
+        self.rotation_info_label.setText(f"{t('rotation_label')}: {self._get_current_rotation_degrees() % 360}°")
         self._restore_current_selection()
 
 
@@ -3102,7 +3153,7 @@ class MainWindow(QMainWindow):
             self._show_pixmap()
 
             self.page_label.setText(
-                f"Page: {self.current_page_index + 1} / {self.page_count}"
+                f"{t('page_label')}: {self.current_page_index + 1} / {self.page_count}"
             )
 
             self._update_page_buttons()
@@ -3118,7 +3169,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "Render Error",
+                t("render_error"),
                 f"Failed to render PDF page.\n\n{exc}"
             )
             self._log(f"Render error: {exc}")
@@ -3246,10 +3297,8 @@ class MainWindow(QMainWindow):
                         self._selection_output_area_notice_shown = True
                         QMessageBox.information(
                             self,
-                            "Output Area Changed",
-                            "Output Area changed to Selected Area.\n\n"
-                            "Because you selected an area manually, the output will use "
-                            "the selected area instead of the whole page."
+                            t("output_area_changed"),
+                            t("output_area_changed_selected")
                         )
 
                 self.page_selections[self.current_page_index] = QRect(rect)
@@ -3292,14 +3341,14 @@ class MainWindow(QMainWindow):
         self.preview_zoom_factor = 1.0
         self.fit_to_page_enabled = True
         self.preview_label.clear_preview()
-        self.pdf_path_label.setText("PDF: Not selected")
-        self.pdf_info_label.setText("Pages: -")
-        self.render_info_label.setText("Preview: Not rendered")
-        self.zoom_info_label.setText("Zoom: Fit Page")
-        self.rotation_info_label.setText("Rotation: 0°")
-        self.selection_info_label.setText("Selection: None")
-        self.checked_pages_label.setText("Checked pages: 0")
-        self.page_label.setText("Page: - / -")
+        self.pdf_path_label.setText(t("pdf_not_selected"))
+        self.pdf_info_label.setText(t("pages_empty"))
+        self.render_info_label.setText(t("preview_not_rendered"))
+        self.zoom_info_label.setText(t("zoom_fit_page"))
+        self.rotation_info_label.setText(t("rotation_zero"))
+        self.selection_info_label.setText(t("selection_none"))
+        self.checked_pages_label.setText(t("checked_pages_zero"))
+        self.page_label.setText(t("page_empty"))
         if hasattr(self, "page_list_widget"):
             self.page_list_widget.clear()
         self._update_page_buttons()
@@ -3312,9 +3361,9 @@ class MainWindow(QMainWindow):
 
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Open Project",
+            t("menu_open_project"),
             str(PROJECTS_DIR),
-            "A4 to A3 Project Files (*.a4a3proj);;JSON Files (*.json);;All Files (*)"
+            t("project_files")
         )
 
         if not file_path:
@@ -3336,7 +3385,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "Save Project Error",
+                t("save_project_error"),
                 f"Failed to save project.\n\n{exc}"
             )
             self._log(f"Save project error: {exc}")
@@ -3346,9 +3395,9 @@ class MainWindow(QMainWindow):
 
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Save Project As",
+            t("menu_save_project_as"),
             str(default_path),
-            "A4 to A3 Project Files (*.a4a3proj);;JSON Files (*.json);;All Files (*)"
+            t("project_files")
         )
 
         if not file_path:
@@ -3368,7 +3417,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "Save Project Error",
+                t("save_project_error"),
                 f"Failed to save project.\n\n{exc}"
             )
             self._log(f"Save project error: {exc}")
@@ -3439,9 +3488,9 @@ class MainWindow(QMainWindow):
         self.current_page_index = max(0, min(target_page, self.page_count - 1))
         self.rotation_degrees = self._get_current_rotation_degrees()
 
-        self.pdf_path_label.setText(f"PDF: {pdf_path}")
-        self.pdf_info_label.setText(f"Pages: {self.page_count}")
-        self.selection_info_label.setText("Selection: None")
+        self.pdf_path_label.setText(f"{t('pdf_label')}: {pdf_path}")
+        self.pdf_info_label.setText(f"{t('pages_label')}: {self.page_count}")
+        self.selection_info_label.setText(t("selection_none"))
 
         self._render_current_page()
         self._rebuild_page_list()
@@ -3541,10 +3590,7 @@ class MainWindow(QMainWindow):
             self,
             "Open PDFs or Images",
             "",
-            "PDF and Image Files (*.pdf *.png *.jpg *.jpeg *.bmp *.webp);;"
-            "PDF Files (*.pdf);;"
-            "Image Files (*.png *.jpg *.jpeg *.bmp *.webp);;"
-            "All Files (*)"
+            t("all_files")
         )
 
         if not file_paths:
@@ -3574,7 +3620,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "Open PDFs Error",
+                t("open_pdfs_error"),
                 f"Failed to open PDFs.\n\n{exc}"
             )
             self._log(f"Open PDFs error: {exc}")
@@ -3583,9 +3629,9 @@ class MainWindow(QMainWindow):
     def open_multiple_pdfs_workspace(self) -> None:
         file_paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Open PDFs / Images",
+            t("open_pdfs_images"),
             "",
-            "PDF Files (*.pdf)"
+            t("pdf_files")
         )
 
         if not file_paths:
@@ -3613,10 +3659,7 @@ class MainWindow(QMainWindow):
             self,
             "Add PDFs or Images to Source PDFs",
             "",
-            "PDF and Image Files (*.pdf *.png *.jpg *.jpeg *.bmp *.webp);;"
-            "PDF Files (*.pdf);;"
-            "Image Files (*.png *.jpg *.jpeg *.bmp *.webp);;"
-            "All Files (*)"
+            t("all_files")
         )
 
         if not file_paths:
@@ -3662,10 +3705,10 @@ class MainWindow(QMainWindow):
             self.checked_pages.clear()
             self.preview_label.clear_preview()
             self.page_list_widget.clear()
-            self.pdf_path_label.setText("PDF: Not selected")
-            self.pdf_info_label.setText("Pages: -")
-            self.selection_info_label.setText("Selection: None")
-            self.checked_pages_label.setText("Checked pages: 0")
+            self.pdf_path_label.setText(t("pdf_not_selected"))
+            self.pdf_info_label.setText(t("pages_empty"))
+            self.selection_info_label.setText(t("selection_none"))
+            self.checked_pages_label.setText(t("checked_pages_zero"))
             self._refresh_workspace_list_text()
             return
 
@@ -3850,7 +3893,7 @@ class MainWindow(QMainWindow):
             return
 
         if not hasattr(self, "workspace_items") or not self.workspace_items:
-            QMessageBox.information(self, "Print Order", "Workspace is empty.")
+            QMessageBox.information(self, t("print_order"), "Workspace is empty.")
             return
 
         if self.current_workspace_index is not None:
@@ -3867,7 +3910,7 @@ class MainWindow(QMainWindow):
         if self.export_order_list.count() <= 0:
             QMessageBox.information(
                 self,
-                "Print Order",
+                t("print_order"),
                 "No selected pages found.\n\nSelect areas on pages first."
             )
             return
@@ -3961,7 +4004,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(
                 self,
-                "Print Order",
+                t("print_order"),
                 f"Failed to jump to selected page.\n\n{exc}"
             )
             self._log(f"Print Order jump failed: {exc}")
@@ -4204,8 +4247,8 @@ class MainWindow(QMainWindow):
             self.checked_pages.clear()
 
         self.pdf_path_label.setText(f"PDF: {file_path}")
-        self.pdf_info_label.setText(f"Pages: {self.page_count}")
-        self.selection_info_label.setText("Selection: None")
+        self.pdf_info_label.setText(f"{t('pages_label')}: {self.page_count}")
+        self.selection_info_label.setText(t("selection_none"))
 
         self._log(f"PDF opened: {file_path}")
         self._log(f"PDF page count: {self.page_count}")
@@ -4218,7 +4261,7 @@ class MainWindow(QMainWindow):
             self,
             "Open PDF",
             "",
-            "PDF Files (*.pdf)"
+            t("pdf_files")
         )
 
         if not file_path:
@@ -4231,7 +4274,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "Open PDF Error",
+                t("open_pdf_error"),
                 f"Failed to open PDF.\n\n{exc}"
             )
             self._log(f"Open PDF error: {exc}")
@@ -4239,12 +4282,12 @@ class MainWindow(QMainWindow):
 
     def go_to_page_dialog(self) -> None:
         if self.page_count <= 0:
-            QMessageBox.information(self, "Go to Page", "Please open a PDF or image first.")
+            QMessageBox.information(self, t("go_to_page"), t("please_open_pdf_or_image_first"))
             return
 
         page_no, ok = QInputDialog.getInt(
             self,
-            "Go to Page",
+            t("go_to_page"),
             f"Enter page number (1 - {self.page_count}):",
             value=self.current_page_index + 1,
             min=1,
@@ -4267,12 +4310,12 @@ class MainWindow(QMainWindow):
 
     def find_text_dialog(self) -> None:
         if not self.current_pdf_path or self.page_count <= 0:
-            QMessageBox.information(self, "Find Text", "Please open a PDF first.")
+            QMessageBox.information(self, t("find_text"), t("please_open_pdf_first"))
             return
 
         text, ok = QInputDialog.getText(
             self,
-            "Find Text",
+            t("find_text"),
             "Enter text to find:",
             text=self.last_search_text,
         )
@@ -4291,7 +4334,7 @@ class MainWindow(QMainWindow):
 
     def find_next_text(self) -> None:
         if not self.current_pdf_path or self.page_count <= 0:
-            QMessageBox.information(self, "Find Next", "Please open a PDF first.")
+            QMessageBox.information(self, t("find_next"), t("please_open_pdf_first"))
             return
 
         query = (self.last_search_text or "").strip()
@@ -4325,7 +4368,7 @@ class MainWindow(QMainWindow):
 
                         QMessageBox.information(
                             self,
-                            "Find Text",
+                            t("find_text"),
                             f"Found '{query}' on page {page_index + 1}."
                         )
                         self._log(f"Find Text: '{query}' found on page {page_index + 1}")
@@ -4336,7 +4379,7 @@ class MainWindow(QMainWindow):
 
             QMessageBox.information(
                 self,
-                "Find Text",
+                t("find_text"),
                 f"'{query}' was not found.\n\n"
                 "Find Text works only with PDFs that already contain text.\n"
                 "Scanned PDFs or image-only PDFs may require OCR in another tool before searching."
@@ -4346,7 +4389,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(
                 self,
-                "Find Text",
+                t("find_text"),
                 f"Search failed.\n\n{exc}"
             )
             self._log(f"Find Text error: {exc}")
@@ -4404,57 +4447,72 @@ class MainWindow(QMainWindow):
 
 
     def zoom_in(self) -> None:
-        if self.page_count <= 0:
+        if self.current_pixmap is None:
             return
 
         self._save_current_selection()
-
-        if self.fit_to_page_enabled:
-            self._sync_zoom_factor_from_current_display()
-
         self.fit_to_page_enabled = False
         self.preview_zoom_factor = min(
-            self.preview_zoom_factor * self.preview_zoom_step,
-            self.preview_zoom_max,
+            float(getattr(self, "preview_zoom_factor", 1.0)) * 1.25,
+            4.0,
         )
 
+        self.render_zoom = max(2.5, min(8.0, 2.5 * self.preview_zoom_factor))
         self._render_current_page()
-        self._log(f"Zoom In applied: {int(self.preview_zoom_factor * 100)}%.")
+        self._restore_current_selection()
+        self._log(
+            f"Zoom In applied with PDF re-render: display={int(self.preview_zoom_factor * 100)}%, "
+            f"render_zoom={self.render_zoom:.2f}"
+        )
 
 
     def zoom_out(self) -> None:
-        if self.page_count <= 0:
+        if self.current_pixmap is None:
             return
 
         self._save_current_selection()
-
-        if self.fit_to_page_enabled:
-            self._sync_zoom_factor_from_current_display()
-
         self.fit_to_page_enabled = False
         self.preview_zoom_factor = max(
-            self.preview_zoom_factor / self.preview_zoom_step,
-            self.preview_zoom_min,
+            float(getattr(self, "preview_zoom_factor", 1.0)) / 1.25,
+            0.25,
         )
 
+        self.render_zoom = max(1.5, min(8.0, 2.5 * self.preview_zoom_factor))
         self._render_current_page()
-        self._log(f"Zoom Out applied: {int(self.preview_zoom_factor * 100)}%.")
+        self._restore_current_selection()
+        self._log(
+            f"Zoom Out applied with PDF re-render: display={int(self.preview_zoom_factor * 100)}%, "
+            f"render_zoom={self.render_zoom:.2f}"
+        )
 
 
     def fit_page(self) -> None:
-        self._push_undo_state()
+        if self.current_pixmap is None:
+            return
+
         self._save_current_selection()
         self.fit_to_page_enabled = True
-        self._show_pixmap()
-        self._log("Fit Page applied.")
+        self.preview_zoom_factor = 1.0
+        self.render_zoom = 2.5
+
+        self._render_current_page()
+        self._restore_current_selection()
+        self._log("Fit Page applied with high quality PDF re-render.")
+
 
     def actual_size(self) -> None:
-        self._push_undo_state()
+        if self.current_pixmap is None:
+            return
+
         self._save_current_selection()
         self.fit_to_page_enabled = False
         self.preview_zoom_factor = 1.0
-        self._show_pixmap()
-        self._log("Actual Size applied.")
+        self.render_zoom = 2.5
+
+        self._render_current_page()
+        self._restore_current_selection()
+        self._log("Actual Size applied with PDF re-render.")
+
 
     def _make_display_basis_pixmap(self, source_pixmap: QPixmap) -> QPixmap:
         display_base = source_pixmap
@@ -4537,7 +4595,7 @@ class MainWindow(QMainWindow):
     def auto_select_content(self) -> None:
         self._push_undo_state()
         if self.current_pixmap is None:
-            QMessageBox.warning(self, "No PDF", "Please open a PDF first.")
+            QMessageBox.warning(self, t("no_pdf"), t("please_open_pdf_first"))
             return
 
         threshold = self._get_auto_select_threshold()
@@ -4546,7 +4604,7 @@ class MainWindow(QMainWindow):
         if rect.isNull() or rect.width() <= 0 or rect.height() <= 0:
             QMessageBox.information(
                 self,
-                "Auto Select",
+                t("auto_select"),
                 "No visible content was detected. Please select an area manually."
             )
             self._log("Auto Select Current Page: no content detected.")
@@ -4629,7 +4687,7 @@ class MainWindow(QMainWindow):
 
     def auto_select_all_workspace_pages(self) -> None:
         if not hasattr(self, "workspace_items") or not self.workspace_items:
-            QMessageBox.information(self, "Auto Select All Pages", "Workspace is empty.")
+            QMessageBox.information(self, t("auto_select_all_pages"), "Workspace is empty.")
             return
 
         result = QMessageBox.question(
@@ -4656,17 +4714,17 @@ class MainWindow(QMainWindow):
                 pass
 
         if total_pages <= 0:
-            QMessageBox.warning(self, "Auto Select All Pages", "No pages found in workspace.")
+            QMessageBox.warning(self, t("auto_select_all_pages"), "No pages found in workspace.")
             return
 
         progress = QProgressDialog(
-            "Preparing auto selection...",
-            "Cancel",
+            t("preparing_auto_selection"),
+            t("cancel"),
             0,
             total_pages,
             self,
         )
-        progress.setWindowTitle("Auto Select All Pages")
+        progress.setWindowTitle(t("auto_select_all_pages"))
         progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
@@ -4791,7 +4849,7 @@ class MainWindow(QMainWindow):
         if self._is_whole_page_output_area():
             QMessageBox.information(
                 self,
-                "Auto Select Page Range",
+                t("auto_select_page_range"),
                 "Auto Select is only needed when Output Area is Selected Area."
             )
             return
@@ -4799,14 +4857,14 @@ class MainWindow(QMainWindow):
         if not self.current_pdf_path or self.page_count <= 0:
             QMessageBox.information(
                 self,
-                "Auto Select Page Range",
-                "Please open a PDF or image first."
+                t("auto_select_page_range"),
+                t("please_open_pdf_or_image_first")
             )
             return
 
         range_text, ok = QInputDialog.getText(
             self,
-            "Auto Select Page Range",
+            t("auto_select_page_range"),
             "Enter page range to auto select:\n"
             "Examples: all, 1-50, 1,3,5, 10-20,35",
             text="1-50" if self.page_count >= 50 else "all",
@@ -4847,13 +4905,13 @@ class MainWindow(QMainWindow):
         original_page_index = self.current_page_index
 
         progress = QProgressDialog(
-            "Preparing auto selection...",
-            "Cancel",
+            t("preparing_auto_selection"),
+            t("cancel"),
             0,
             len(page_indices),
             self,
         )
-        progress.setWindowTitle("Auto Select Page Range")
+        progress.setWindowTitle(t("auto_select_page_range"))
         progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
@@ -4909,7 +4967,7 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(
             self,
-            "Auto Select Page Range",
+            t("auto_select_page_range"),
             f"Auto selection completed.\n\n"
             f"Selected pages: {selected_count}/{len(page_indices)}"
         )
@@ -4928,8 +4986,8 @@ class MainWindow(QMainWindow):
         if not self.current_pdf_path or self.page_count <= 0:
             QMessageBox.information(
                 self,
-                "Auto Select All Pages",
-                "Please open a PDF or image first."
+                t("auto_select_all_pages"),
+                t("please_open_pdf_or_image_first")
             )
             return
 
@@ -4951,7 +5009,7 @@ class MainWindow(QMainWindow):
 
         result = QMessageBox.question(
             self,
-            "Auto Select All Pages",
+            t("auto_select_all_pages"),
             "Automatically detect content area for all pages?\n\n"
             "Existing selections may be replaced.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
@@ -4961,13 +5019,13 @@ class MainWindow(QMainWindow):
             return
 
         progress = QProgressDialog(
-            "Preparing auto selection...",
-            "Cancel",
+            t("preparing_auto_selection"),
+            t("cancel"),
             0,
             self.page_count,
             self,
         )
-        progress.setWindowTitle("Auto Select All Pages")
+        progress.setWindowTitle(t("auto_select_all_pages"))
         progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
@@ -4993,7 +5051,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "Auto Select All Pages",
+                t("auto_select_all_pages"),
                 f"Auto selection failed.\n\n{exc}"
             )
             self._log(f"Auto Select All Pages error: {exc}")
@@ -5010,13 +5068,13 @@ class MainWindow(QMainWindow):
         if canceled:
             QMessageBox.information(
                 self,
-                "Auto Select All Pages",
+                t("auto_select_all_pages"),
                 f"Auto selection was canceled.\n\nSelected pages before cancel: {selected_count}"
             )
         else:
             QMessageBox.information(
                 self,
-                "Auto Select All Pages",
+                t("auto_select_all_pages"),
                 f"Auto selection completed.\n\nSelected pages: {selected_count}/{self.page_count}"
             )
 
@@ -5077,7 +5135,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "export_order_list"):
             self.export_order_list.clear()
 
-        self.selection_info_label.setText("Selection: None")
+        self.selection_info_label.setText(t("selection_none"))
         self.is_modified = True
         self._log("All selections cleared.")
 
@@ -5089,7 +5147,7 @@ class MainWindow(QMainWindow):
             self.page_selections.pop(self.current_page_index, None)
             self.page_selection_display_sizes.pop(self.current_page_index, None)
             self.checked_pages.discard(self.current_page_index)
-        self.selection_info_label.setText("Selection: None")
+        self.selection_info_label.setText(t("selection_none"))
         self._refresh_current_page_check_state()
         self._refresh_page_list_item(self.current_page_index)
         self.is_modified = True
@@ -5098,13 +5156,13 @@ class MainWindow(QMainWindow):
     def apply_selection_to_all_pages(self) -> None:
         self._push_undo_state()
         if self.page_count <= 0:
-            QMessageBox.warning(self, "No PDF", "Please open a PDF first.")
+            QMessageBox.warning(self, t("no_pdf"), t("please_open_pdf_first"))
             return
 
         rect = self.preview_label.get_selection_rect()
 
         if rect.isNull() or rect.width() <= 0 or rect.height() <= 0:
-            QMessageBox.warning(self, "No Selection", "Please select an area first.")
+            QMessageBox.warning(self, t("no_selection"), t("please_select_area_first"))
             return
 
         for page_index in range(self.page_count):
@@ -5121,7 +5179,7 @@ class MainWindow(QMainWindow):
         )
         QMessageBox.information(
             self,
-            "Applied",
+            t("applied"),
             f"Selection was applied to all {self.page_count} pages."
         )
 
@@ -5199,10 +5257,10 @@ class MainWindow(QMainWindow):
         self._render_current_page()
 
         if hasattr(self, "rotation_info_label"):
-            self.rotation_info_label.setText("Rotation: 0°")
+            self.rotation_info_label.setText(t("rotation_zero"))
 
         if hasattr(self, "zoom_info_label"):
-            self.zoom_info_label.setText("Zoom: Fit Page")
+            self.zoom_info_label.setText(t("zoom_fit_page"))
 
         self.refresh_print_order_thumbnails()
         self._log("View reset for current page: rotation=0°, zoom=Fit Page.")
@@ -5274,7 +5332,7 @@ class MainWindow(QMainWindow):
         if not lines:
             QMessageBox.warning(
                 self,
-                "Export",
+                t("export"),
                 "No selected pages were found for export."
             )
             return False
@@ -5288,7 +5346,7 @@ class MainWindow(QMainWindow):
 
         result = QMessageBox.question(
             self,
-            "Confirm Export",
+            t("confirm_export"),
             message,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
@@ -5299,7 +5357,7 @@ class MainWindow(QMainWindow):
 
     def _prompt_export_type(self) -> bool:
         dialog = QMessageBox(self)
-        dialog.setWindowTitle("Choose Export Type")
+        dialog.setWindowTitle(t("choose_export_type"))
         dialog.setIcon(QMessageBox.Icon.Question)
         dialog.setText("How do you want to export?")
         dialog.setInformativeText(
@@ -5307,9 +5365,9 @@ class MainWindow(QMainWindow):
             "Single Page Mode: export the selected area as clean single-page output."
         )
 
-        a3_button = dialog.addButton("Poster Print Mode", QMessageBox.ButtonRole.AcceptRole)
-        selection_button = dialog.addButton("Single Page Mode", QMessageBox.ButtonRole.ActionRole)
-        cancel_button = dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        a3_button = dialog.addButton(t("poster_print_mode"), QMessageBox.ButtonRole.AcceptRole)
+        selection_button = dialog.addButton(t("single_page_mode"), QMessageBox.ButtonRole.ActionRole)
+        cancel_button = dialog.addButton(t("cancel"), QMessageBox.ButtonRole.RejectRole)
 
         dialog.setDefaultButton(a3_button)
         dialog.exec()
@@ -5338,21 +5396,21 @@ class MainWindow(QMainWindow):
     def create_poster_pdf(self) -> None:
         if hasattr(self, "export_type_combo"):
             self._apply_combo_data(self.export_type_combo, "a3_split")
-            self.update_export_option_states()
+        self.update_export_option_states()
 
         self.export_print_pdf(skip_type_prompt=True)
 
     def create_single_page_pdf(self) -> None:
         if hasattr(self, "export_type_combo"):
             self._apply_combo_data(self.export_type_combo, "selection_only")
-            self.update_export_option_states()
+        self.update_export_option_states()
 
         self.export_print_pdf(skip_type_prompt=True)
 
 
     def export_print_pdf(self, skip_type_prompt: bool = False) -> None:
         if not self.current_pdf_path:
-            QMessageBox.warning(self, "No PDF", "Please open a PDF file first.")
+            QMessageBox.warning(self, t("no_pdf"), t("please_open_pdf_first"))
             return
 
         if not skip_type_prompt:
@@ -5365,7 +5423,7 @@ class MainWindow(QMainWindow):
             try:
                 export_selections = self._build_export_selections()
             except Exception as exc:
-                QMessageBox.warning(self, "No Selection", str(exc))
+                QMessageBox.warning(self, t("no_selection"), str(exc))
                 return
         else:
             export_selections = {}
@@ -5380,9 +5438,9 @@ class MainWindow(QMainWindow):
 
         output_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Export PDF",
+            t("menu_export_pdf"),
             str(default_path),
-            "PDF Files (*.pdf)"
+            t("pdf_files")
         )
 
         if not output_path:
@@ -5427,7 +5485,7 @@ class MainWindow(QMainWindow):
 
                     QMessageBox.information(
                         self,
-                        "Export Complete",
+                        t("export_complete"),
                         "Separate PDF files were created:\n\n" + "\n".join(output_files[:10])
                     )
 
@@ -5439,7 +5497,7 @@ class MainWindow(QMainWindow):
                 self._export_workspace_to_pdf(output_path, options)
                 QMessageBox.information(
                     self,
-                    "Export Complete",
+                    t("export_complete"),
                     f"Print output PDF was created:\n\n{output_path}"
                 )
                 return
@@ -5469,7 +5527,7 @@ class MainWindow(QMainWindow):
                 self._log(f"Export completed. Files created: {len(output_files)}")
                 QMessageBox.information(
                     self,
-                    "Export Complete",
+                    t("export_complete"),
                     "Separate PDF files were created:\n\n" + "\n".join(output_files[:10])
                 )
                 try:
@@ -5491,7 +5549,7 @@ class MainWindow(QMainWindow):
                 self._log("Export completed.")
                 QMessageBox.information(
                     self,
-                    "Export Complete",
+                    t("export_complete"),
                     f"Output PDF was created:\n\n{output_path}"
                 )
                 try:
@@ -5503,14 +5561,14 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "Export Error",
+                t("export_error"),
                 f"Failed to export split print PDF.\n\n{exc}"
             )
             self._log(f"Export error: {exc}")
 
     def _create_temp_print_pdf(self) -> str:
         if not self.current_pdf_path:
-            raise RuntimeError("Please open a PDF first.")
+            raise RuntimeError(t("please_open_pdf_first"))
 
         export_selections = self._build_export_selections()
 
@@ -5575,7 +5633,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "Open Exports Folder",
+                t("open_exports_folder"),
                 f"Failed to open exports folder.\n\n{exc}"
             )
             self._log(f"Open exports folder error: {exc}")
@@ -5585,7 +5643,7 @@ class MainWindow(QMainWindow):
         if not self.last_exported_pdf_path:
             QMessageBox.information(
                 self,
-                "Open Last Exported PDF",
+                t("menu_open_last_exported_pdf"),
                 "No exported PDF is available yet.\n\nPlease export a PDF first."
             )
             return
@@ -5595,7 +5653,7 @@ class MainWindow(QMainWindow):
         if not path.exists():
             QMessageBox.warning(
                 self,
-                "Open Last Exported PDF",
+                t("menu_open_last_exported_pdf"),
                 f"The last exported PDF was not found:\n\n{path}"
             )
             return
@@ -5606,7 +5664,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "Open Error",
+                t("open_error"),
                 f"Failed to open the exported PDF.\n\n{exc}"
             )
             self._log(f"Open last exported PDF error: {exc}")
@@ -5638,7 +5696,7 @@ class MainWindow(QMainWindow):
         printer.setFullPage(False)
 
         dialog = QPrintDialog(printer, self)
-        dialog.setWindowTitle("Print Exported PDF")
+        dialog.setWindowTitle(t("print_exported_pdf"))
 
         if dialog.exec() != QPrintDialog.DialogCode.Accepted:
             self._log("Print canceled.")
@@ -5655,7 +5713,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(
                 self,
-                "Print Error",
+                t("print_error"),
                 f"Failed to print PDF.\n\n{exc}"
             )
             self._log(f"Qt print error: {exc}")
@@ -5720,7 +5778,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Print",
-                "Please open a PDF first."
+                t("please_open_pdf_first")
             )
             return
 
@@ -5769,16 +5827,16 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 QMessageBox.critical(
                     self,
-                    "Open Error",
+                    t("open_error"),
                     f"Failed to open temporary print PDF.\n\n{exc}"
                 )
                 self._log(f"Open temporary print PDF error: {exc}")
     def set_basic_mode(self) -> None:
-        self.mode_label.setText("Mode: Basic")
+        self.mode_label.setText(t("mode_basic"))
         self._log("Switched to Basic Mode.")
 
     def set_advanced_mode(self) -> None:
-        self.mode_label.setText("Mode: Advanced")
+        self.mode_label.setText(t("mode_advanced"))
         self._log("Switched to Advanced Mode.")
 
     def show_log_panel(self) -> None:
@@ -5788,7 +5846,7 @@ class MainWindow(QMainWindow):
     def show_quick_start(self) -> None:
         QMessageBox.information(
             self,
-            "Quick Start",
+            t("quick_start"),
             "1. Open PDF\n2. Drag on preview to select area\n3. Choose output mode\n4. Choose split layout\n5. Export split-print PDF\n6. Print the exported PDF with an A4 printer"
         )
 
@@ -5799,7 +5857,7 @@ class MainWindow(QMainWindow):
         self._log(f"Current page index: {self.current_page_index}")
         self._log(f"Pixmap exists: {self.current_pixmap is not None}")
         self._log(f"Selection pages: {len(self.page_selections)}")
-        self._log(f"Checked pages: {len(self.checked_pages)}")
+        self._log(f"{t('checked_pages_label')}: {len(self.checked_pages)}")
         self._log(f"Batch output: {self.batch_output_combo.currentData()}")
         self._log(f"Auto select sensitivity: {self.auto_select_sensitivity_combo.currentText()} / {self.auto_select_sensitivity_combo.currentData()}")
         self._log(f"Export type: {self.export_type_combo.currentData()}")
@@ -5870,15 +5928,29 @@ class MainWindow(QMainWindow):
         if failed:
             QMessageBox.warning(
                 self,
-                "Menu Check",
+                t("menu_check"),
                 "Some menu actions are not connected.\n\n" + "\n".join(failed)
             )
         else:
             QMessageBox.information(
                 self,
-                "Menu Check",
+                t("menu_check"),
                 "All checked menu actions are connected."
             )
+
+
+
+    def send_feedback(self) -> None:
+        try:
+            webbrowser.open("https://github.com/winjjungk-ar/pdf-poster-studio/issues/new")
+            self._log("Opened feedback page.")
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                t("send_feedback"),
+                f"Failed to open feedback page.\\n\\n{exc}"
+            )
+            self._log(f"Open feedback page error: {exc}")
 
 
     def show_user_guide(self) -> None:
@@ -6149,7 +6221,7 @@ class MainWindow(QMainWindow):
         }
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("User Guide / How to Use")
+        dialog.setWindowTitle(t("user_guide"))
         dialog.setMinimumSize(820, 660)
         dialog.setWindowIcon(self.windowIcon())
 
@@ -6158,7 +6230,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
 
         language_layout = QHBoxLayout()
-        language_label = QLabel("Language")
+        language_label = QLabel(t("language"))
         language_combo = QComboBox()
         language_combo.addItems(["English", "한국어", "日本語", "中文（简体）"])
         language_combo.setCurrentText("English")
@@ -6186,7 +6258,7 @@ class MainWindow(QMainWindow):
 
         language_combo.currentIndexChanged.connect(change_language)
 
-        close_button = QPushButton("Close")
+        close_button = QPushButton(t("close"))
         close_button.clicked.connect(dialog.accept)
 
         button_layout = QHBoxLayout()
@@ -6213,14 +6285,14 @@ class MainWindow(QMainWindow):
         notes = """
 <h2>PDF Poster Studio - Release Notes</h2>
 
-<h3>Version 0.9.6</h3>
+<h3>Version 0.9.7</h3>
 <ul>
   <li><b>Equal 11-section multilingual User Guide</b>: English, Korean, Japanese, and Simplified Chinese guides now share the same 11-section structure.</li>
 </ul>
 <hr>
 
 
-<h3>Version 0.9.6</h3>
+<h3>Version 0.9.7</h3>
 <ul>
   <li><b>Task Launcher welcome screen</b>: Startup popup now shows large workflow cards.</li>
   <li><b>Home task cards</b>: Merge PDFs, Extract Pages, Make Poster, Rotate Pages, and Selected Area PDF workflows.</li>
@@ -6266,7 +6338,7 @@ class MainWindow(QMainWindow):
 """
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("Release Notes")
+        dialog.setWindowTitle(t("release_notes"))
         dialog.setMinimumSize(760, 620)
         dialog.setWindowIcon(self.windowIcon())
 
@@ -6289,7 +6361,7 @@ class MainWindow(QMainWindow):
             }
         """)
 
-        close_button = QPushButton("Close")
+        close_button = QPushButton(t("close"))
         close_button.clicked.connect(dialog.accept)
 
         button_layout = QHBoxLayout()
@@ -6308,13 +6380,45 @@ class MainWindow(QMainWindow):
     def show_about(self) -> None:
         QMessageBox.about(
             self,
-            "About",
-            f"PDF Poster Studio\nVersion: 0.9.6\nCreator: {CREATOR}"
+            t("about"),
+            f"PDF Poster Studio\nVersion: 0.9.7\nCreator: {CREATOR}"
         )
 
     def not_implemented(self) -> None:
         self._log("Not implemented menu selected.")
-        QMessageBox.information(self, "Not Implemented", "This function will be implemented later.")
+        QMessageBox.information(self, t("not_implemented"), "This function will be implemented later.")
+
+    def keyPressEvent(self, event):
+        key = event.key()
+
+        if key == Qt.Key.Key_PageDown:
+            if hasattr(self, "next_page") and callable(self.next_page):
+                self.next_page()
+                event.accept()
+                return
+
+        if key == Qt.Key.Key_PageUp:
+            if hasattr(self, "previous_page") and callable(self.previous_page):
+                self.previous_page()
+                event.accept()
+                return
+
+        if key == Qt.Key.Key_Home:
+            if getattr(self, "page_count", 0) > 0:
+                self.current_page_index = 0
+                self._render_current_page()
+                event.accept()
+                return
+
+        if key == Qt.Key.Key_End:
+            if getattr(self, "page_count", 0) > 0:
+                self.current_page_index = self.page_count - 1
+                self._render_current_page()
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
+
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -6323,12 +6427,112 @@ class MainWindow(QMainWindow):
             self._save_current_selection()
             self._show_pixmap()
 
+
+    def show_ocr_settings(self):
+        settings = load_ocr_settings()
+
+        presets = [
+            (t("ocr_preset_eng"), "eng"),
+            (t("ocr_preset_kor_eng"), "eng+kor"),
+            (t("ocr_preset_jpn_eng"), "eng+jpn"),
+            (t("ocr_preset_chi_sim_eng"), "eng+chi_sim"),
+            (t("ocr_preset_chi_tra_eng"), "eng+chi_tra"),
+            (t("ocr_preset_all"), "eng+kor+jpn+chi_sim+chi_tra"),
+        ]
+
+        current_language = settings.get("language", "eng+kor")
+        labels = [label for label, value in presets]
+        values = [value for label, value in presets]
+
+        try:
+            current_index = values.index(current_language)
+        except ValueError:
+            current_index = 1
+
+        selected_label, ok = QInputDialog.getItem(
+            self,
+            t("ocr_settings"),
+            t("ocr_language_preset"),
+            labels,
+            current_index,
+            False,
+        )
+
+        if not ok:
+            return
+
+        selected_language = dict(presets)[selected_label]
+
+        dpi_items = ["150", "200", "300"]
+        current_dpi = str(settings.get("dpi", 200))
+        try:
+            dpi_index = dpi_items.index(current_dpi)
+        except ValueError:
+            dpi_index = 1
+
+        selected_dpi, ok = QInputDialog.getItem(
+            self,
+            t("ocr_settings"),
+            t("ocr_dpi"),
+            dpi_items,
+            dpi_index,
+            False,
+        )
+
+        if not ok:
+            return
+
+        settings["language"] = selected_language
+        settings["dpi"] = int(selected_dpi)
+        save_ocr_settings(settings)
+
+        # OCR 설정 변경 시 기존 검색 캐시 삭제
+        self.search_results = []
+        self.search_result_index = -1
+
+        QMessageBox.information(
+            self,
+            t("ocr_settings"),
+            t("ocr_saved") + chr(10) + chr(10) + t("ocr_speed_tip"),
+        )
+
+
+    def show_language_settings(self):
+        languages = {
+            t("korean"): "ko",
+            t("english"): "en",
+        }
+
+        current = current_language()
+        current_label = t("korean") if current == "ko" else t("english")
+
+        selected, ok = QInputDialog.getItem(
+            self,
+            t("language_settings"),
+            t("select_language"),
+            list(languages.keys()),
+            0 if current_label == t("korean") else 1,
+            False,
+        )
+
+        if not ok:
+            return
+
+        set_language(languages[selected])
+
+        QMessageBox.information(
+            self,
+            t("language_settings"),
+            t("language_changed_restart"),
+        )
+
+
     def closeEvent(self, event) -> None:
         if self.is_modified:
             result = QMessageBox.question(
                 self,
-                "Unsaved Changes",
-                "There are unsaved changes. Save before exit?",
+                t("unsaved_changes"),
+                t("unsaved_exit"),
                 QMessageBox.StandardButton.Save |
                 QMessageBox.StandardButton.Discard |
                 QMessageBox.StandardButton.Cancel
@@ -6346,3 +6550,332 @@ class MainWindow(QMainWindow):
         self.pdf_renderer.close()
         self._log("Application closing.")
         event.accept()
+
+    def find_text_dialog(self):
+        if not self.current_pdf_path:
+            QMessageBox.information(self, t("find_text"), t("please_open_pdf_first"))
+            return
+
+        query, ok = QInputDialog.getText(
+            self,
+            t("find_text"),
+            t("find_text_input"),
+            text=getattr(self, "last_find_query", ""),
+        )
+
+        if not ok or not query.strip():
+            return
+
+        query = query.strip()
+
+        if query != getattr(self, "last_find_query", ""):
+            self.search_results = []
+            self.search_result_index = -1
+            self.last_ocr_search_page = -1
+
+        self.last_find_query = query
+        self.find_next_text()
+
+
+    def find_next_text(self):
+        if not self.current_pdf_path:
+            QMessageBox.information(self, t("find_text"), t("please_open_pdf_first"))
+            return
+
+        query = getattr(self, "last_find_query", "").strip()
+        if not query:
+            self.find_text_dialog()
+            return
+
+        try:
+            # 1) PDF 텍스트 레이어 결과는 한 번만 전체 검색해서 캐시
+            if not hasattr(self, "search_results"):
+                self.search_results = []
+            if not hasattr(self, "search_result_index"):
+                self.search_result_index = -1
+
+            if not self.search_results:
+                self._log(f"Find Text: searching text layer for '{query}'...")
+                self.search_results = search_pdf_with_optional_ocr(
+                    self.current_pdf_path,
+                    query,
+                    use_ocr_if_needed=False,
+                    language="eng+kor",
+                    dpi=200,
+                )
+                self.search_result_index = -1
+
+            # 2) 텍스트 레이어 결과가 있으면 기존 방식으로 다음 결과 이동
+            if self.search_results:
+                self.search_result_index = (self.search_result_index + 1) % len(self.search_results)
+                result = self.search_results[self.search_result_index]
+                self._show_search_result(result)
+                return
+
+            # 3) 텍스트 결과가 없으면 OCR은 현재 페이지부터 1페이지씩 찾고 발견 즉시 중단
+            start_page = int(getattr(self, "current_page_index", 0))
+            if hasattr(self, "last_ocr_search_page"):
+                start_page = int(self.last_ocr_search_page) + 1
+
+            self._log(f"OCR quick search from page {start_page + 1}: '{query}'")
+
+            ocr_results = search_pdf_ocr_from_page_limited(
+                self.current_pdf_path,
+                query,
+                start_page_index=start_page,
+                language="eng+kor",
+                dpi=200,
+                max_pages=3,
+                max_seconds=8.0,
+            )
+
+            if not ocr_results:
+                self.last_ocr_search_page = -1
+                box = QMessageBox(self)
+                box.setWindowTitle(t("find_text"))
+                box.setIcon(QMessageBox.Icon.Information)
+                box.setText(t("search_no_result_quick").format(query=query))
+
+                next_button = box.addButton(t("continue_ocr_search"), QMessageBox.ButtonRole.ActionRole)
+                box.addButton(t("close"), QMessageBox.ButtonRole.RejectRole)
+                box.setDefaultButton(next_button)
+                box.exec()
+
+                if box.clickedButton() == next_button:
+                    self.last_ocr_search_page = start_page + 2
+                    self.find_next_text()
+
+                return
+
+            self.search_results = ocr_results
+            self.search_result_index = 0
+            result = self.search_results[0]
+            self.last_ocr_search_page = result.page_index
+
+            self._show_search_result(result)
+
+        except Exception as exc:
+            QMessageBox.information(
+                self,
+                t("find_text"),
+                t("search_no_result").format(query=query),
+            )
+            self._log(f"Find Text error hidden from user: {exc}")
+
+
+    def render_current_page(self):
+        return self._render_current_page()
+
+
+    def _go_to_search_result_page(self, page_index: int):
+        page_index = max(0, int(page_index))
+
+        if not hasattr(self, "current_page_index"):
+            self.current_page_index = page_index
+            return
+
+        current = int(self.current_page_index)
+
+        if current == page_index:
+            # 현재 페이지라도 미리보기를 다시 그릴 수 있는 함수가 있으면 호출
+            for method_name in (
+                "render_page",
+                "render_pdf_page",
+                "update_preview",
+                "refresh_preview",
+                "update_page_view",
+                "display_page",
+                "show_page",
+            ):
+                method = getattr(self, method_name, None)
+                if callable(method):
+                    try:
+                        method()
+                        return
+                    except TypeError:
+                        try:
+                            method(page_index)
+                            return
+                        except TypeError:
+                            pass
+            return
+
+        # 직접 current_page_index만 바꾸면 화면이 안 바뀌는 경우가 있어서
+        # 기존 페이지 이동 버튼 로직을 사용한다.
+        guard = 0
+        while int(getattr(self, "current_page_index", current)) < page_index and guard < 10000:
+            before = int(getattr(self, "current_page_index", current))
+            if hasattr(self, "next_page") and callable(self.next_page):
+                self.next_page()
+            else:
+                self.current_page_index = before + 1
+
+            after = int(getattr(self, "current_page_index", before + 1))
+            if after == before:
+                self.current_page_index = before + 1
+            guard += 1
+
+        guard = 0
+        while int(getattr(self, "current_page_index", current)) > page_index and guard < 10000:
+            before = int(getattr(self, "current_page_index", current))
+            if hasattr(self, "previous_page") and callable(self.previous_page):
+                self.previous_page()
+            else:
+                self.current_page_index = before - 1
+
+            after = int(getattr(self, "current_page_index", before - 1))
+            if after == before:
+                self.current_page_index = before - 1
+            guard += 1
+
+        # 페이지 이동 후 최종 미리보기 갱신 시도
+        for method_name in (
+            "render_page",
+            "render_pdf_page",
+            "update_preview",
+            "refresh_preview",
+            "update_page_view",
+            "display_page",
+            "show_page",
+        ):
+            method = getattr(self, method_name, None)
+            if callable(method):
+                try:
+                    method()
+                    return
+                except TypeError:
+                    try:
+                        method(page_index)
+                        return
+                    except TypeError:
+                        pass
+
+
+    def _show_search_result(self, result):
+        self._go_to_search_result_page(result.page_index)
+        self._highlight_search_result(result)
+
+        source_label = t("found_in_ocr") if result.source == "ocr" else t("found_in_pdf_text")
+
+        total = len(getattr(self, "search_results", []))
+        index = int(getattr(self, "search_result_index", 0)) + 1
+
+        message = t("search_found_message").format(
+            source=source_label,
+            index=index,
+            total=total,
+            page=result.page_index + 1,
+            text=result.text,
+        )
+
+        box = QMessageBox(self)
+        box.setWindowTitle(t("find_text"))
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(message)
+
+        next_button = box.addButton(t("find_next_button"), QMessageBox.ButtonRole.ActionRole)
+        box.addButton(t("close"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(next_button)
+
+        box.exec()
+
+        self._log(
+            f"Find Text: '{getattr(self, 'last_find_query', '')}' result {index}/{total} "
+            f"on page {result.page_index + 1} by {result.source}"
+        )
+
+        if box.clickedButton() == next_button:
+            # OCR 결과는 페이지 단위 캐시라 다음 OCR 검색으로 이어간다.
+            if result.source == "ocr":
+                self.search_results = []
+                self.search_result_index = -1
+                self.last_ocr_search_page = result.page_index
+            self.find_next_text()
+
+
+    def _highlight_search_result(self, result):
+        if not getattr(result, "rect", None):
+            return
+
+        if not hasattr(self, "preview_label"):
+            return
+
+        pixmap = self.preview_label.pixmap()
+        if pixmap is None or pixmap.isNull():
+            return
+
+        try:
+            import fitz
+
+            doc = fitz.open(self.current_pdf_path)
+            page = doc[result.page_index]
+            page_rect = page.rect
+
+            highlighted = pixmap.copy()
+            painter = QPainter(highlighted)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+            scale_x = highlighted.width() / max(1.0, page_rect.width)
+            scale_y = highlighted.height() / max(1.0, page_rect.height)
+
+            rect = result.rect
+            x = int(rect.x0 * scale_x)
+            y = int(rect.y0 * scale_y)
+            w = max(18, int((rect.x1 - rect.x0) * scale_x))
+            h = max(18, int((rect.y1 - rect.y0) * scale_y))
+
+            # 너무 작은 단어도 잘 보이도록 주변 여백 확장
+            pad_x = max(10, int(w * 0.45))
+            pad_y = max(8, int(h * 0.9))
+
+            hx = max(0, x - pad_x)
+            hy = max(0, y - pad_y)
+            hw = min(highlighted.width() - hx, w + pad_x * 2)
+            hh = min(highlighted.height() - hy, h + pad_y * 2)
+
+            # 1) 넓은 노란 반투명 영역
+            painter.fillRect(hx, hy, hw, hh, QColor(255, 235, 0, 150))
+
+            # 2) 두꺼운 빨간 테두리
+            painter.setPen(QPen(QColor(255, 0, 0), 5))
+            painter.drawRect(hx, hy, hw, hh)
+
+            # 3) 안쪽 주황 테두리
+            painter.setPen(QPen(QColor(255, 140, 0), 2))
+            painter.drawRect(max(0, hx + 5), max(0, hy + 5), max(1, hw - 10), max(1, hh - 10))
+
+            # 4) 위쪽 라벨 박스
+            label = f"검색 결과 {getattr(self, 'search_result_index', 0) + 1}/{len(getattr(self, 'search_results', []))}"
+            font = QFont()
+            font.setPointSize(12)
+            font.setBold(True)
+            painter.setFont(font)
+
+            label_w = 170
+            label_h = 32
+            label_x = hx
+            label_y = max(0, hy - label_h - 8)
+
+            painter.fillRect(label_x, label_y, label_w, label_h, QColor(255, 0, 0, 220))
+            painter.setPen(QPen(QColor(255, 255, 255), 1))
+            painter.drawText(label_x + 10, label_y + 22, label)
+
+            # 5) 라벨에서 결과 위치로 내려가는 화살표
+            arrow_start_x = label_x + 24
+            arrow_start_y = label_y + label_h
+            arrow_end_x = hx + max(8, min(hw // 2, 40))
+            arrow_end_y = hy
+
+            painter.setPen(QPen(QColor(255, 0, 0), 4))
+            painter.drawLine(arrow_start_x, arrow_start_y, arrow_end_x, arrow_end_y)
+            painter.drawLine(arrow_end_x, arrow_end_y, arrow_end_x - 8, arrow_end_y - 12)
+            painter.drawLine(arrow_end_x, arrow_end_y, arrow_end_x + 12, arrow_end_y - 6)
+
+            painter.end()
+
+            self.preview_label.setPixmap(highlighted)
+            doc.close()
+
+        except Exception as exc:
+            self._log(f"Search highlight failed: {exc}")
+

@@ -1,0 +1,459 @@
+# schema_error_diagnose.txt
+
+- generated_at: 2026-08-10T22:09:44
+- root: E:\a4_to_a3_poster_studio
+- python: C:\Users\jjk\AppData\Local\Programs\Python\Python313\python.exe
+
+## File existence
+- [OK] `E:\a4_to_a3_poster_studio\main.py`
+- [OK] `E:\a4_to_a3_poster_studio\app\db\database.py`
+- [OK] `E:\a4_to_a3_poster_studio\app\config.py`
+- [OK] `E:\a4_to_a3_poster_studio\app\utils\paths.py`
+
+## File: `main.py`
+- lines: 44
+- ast: OK
+
+### Keyword contexts
+#### hit line 5, pattern `initialize`
+```text
+00001: import sys
+00002: 
+00003: from PyQt6.QtWidgets import QApplication, QMessageBox
+00004: 
+00005: from app.db.database import initialize_database
+00006: from app.main_window import MainWindow
+00007: 
+00008: 
+00009: def main() -> int:
+```
+#### hit line 16, pattern `initialize`
+```text
+00012:     app.setOrganizationName("JI JEONG GEUN")
+00013:     app.setQuitOnLastWindowClosed(True)
+00014: 
+00015:     try:
+00016:         initialize_database()
+00017:     except Exception as exc:
+00018:         QMessageBox.critical(
+00019:             None,
+00020:             "Database Error",
+```
+#### hit line 20, pattern `database`
+```text
+00016:         initialize_database()
+00017:     except Exception as exc:
+00018:         QMessageBox.critical(
+00019:             None,
+00020:             "Database Error",
+00021:             f"Failed to initialize database.\n\n{exc}"
+00022:         )
+00023:         return 1
+00024: 
+```
+#### hit line 21, pattern `initialize`
+```text
+00017:     except Exception as exc:
+00018:         QMessageBox.critical(
+00019:             None,
+00020:             "Database Error",
+00021:             f"Failed to initialize database.\n\n{exc}"
+00022:         )
+00023:         return 1
+00024: 
+00025:     print("[INFO] Creating MainWindow...")
+```
+
+### Functions
+
+## File: `app\db\database.py`
+- lines: 30
+- ast: OK
+
+### Keyword contexts
+#### hit line 1, pattern `sqlite`
+```text
+00001: import sqlite3
+00002: from pathlib import Path
+00003: import sys
+00004: 
+00005: from app.config import DB_PATH
+```
+#### hit line 2, pattern `Path`
+```text
+00001: import sqlite3
+00002: from pathlib import Path
+00003: import sys
+00004: 
+00005: from app.config import DB_PATH
+00006: from app.config import DATA_DIR
+```
+#### hit line 5, pattern `DB`
+```text
+00001: import sqlite3
+00002: from pathlib import Path
+00003: import sys
+00004: 
+00005: from app.config import DB_PATH
+00006: from app.config import DATA_DIR
+00007: 
+00008: 
+00009: def _resource_path(relative_path: str) -> Path:
+```
+#### hit line 6, pattern `DATA_DIR`
+```text
+00002: from pathlib import Path
+00003: import sys
+00004: 
+00005: from app.config import DB_PATH
+00006: from app.config import DATA_DIR
+00007: 
+00008: 
+00009: def _resource_path(relative_path: str) -> Path:
+00010:     """Resolve resource path both in source and PyInstaller build."""
+```
+#### hit line 9, pattern `Path`
+```text
+00005: from app.config import DB_PATH
+00006: from app.config import DATA_DIR
+00007: 
+00008: 
+00009: def _resource_path(relative_path: str) -> Path:
+00010:     """Resolve resource path both in source and PyInstaller build."""
+00011:     base_path = getattr(sys, "_MEIPASS", None)
+00012: 
+00013:     if base_path:
+```
+#### hit line 10, pattern `Path`
+```text
+00006: from app.config import DATA_DIR
+00007: 
+00008: 
+00009: def _resource_path(relative_path: str) -> Path:
+00010:     """Resolve resource path both in source and PyInstaller build."""
+00011:     base_path = getattr(sys, "_MEIPASS", None)
+00012: 
+00013:     if base_path:
+00014:         return Path(base_path) / relative_path
+```
+#### hit line 11, pattern `Path`
+```text
+00007: 
+00008: 
+00009: def _resource_path(relative_path: str) -> Path:
+00010:     """Resolve resource path both in source and PyInstaller build."""
+00011:     base_path = getattr(sys, "_MEIPASS", None)
+00012: 
+00013:     if base_path:
+00014:         return Path(base_path) / relative_path
+00015: 
+```
+#### hit line 13, pattern `Path`
+```text
+00009: def _resource_path(relative_path: str) -> Path:
+00010:     """Resolve resource path both in source and PyInstaller build."""
+00011:     base_path = getattr(sys, "_MEIPASS", None)
+00012: 
+00013:     if base_path:
+00014:         return Path(base_path) / relative_path
+00015: 
+00016:     # Source tree fallback
+00017:     return Path(__file__).resolve().parents[2] / relative_path
+```
+#### hit line 14, pattern `Path`
+```text
+00010:     """Resolve resource path both in source and PyInstaller build."""
+00011:     base_path = getattr(sys, "_MEIPASS", None)
+00012: 
+00013:     if base_path:
+00014:         return Path(base_path) / relative_path
+00015: 
+00016:     # Source tree fallback
+00017:     return Path(__file__).resolve().parents[2] / relative_path
+00018: 
+```
+#### hit line 17, pattern `Path`
+```text
+00013:     if base_path:
+00014:         return Path(base_path) / relative_path
+00015: 
+00016:     # Source tree fallback
+00017:     return Path(__file__).resolve().parents[2] / relative_path
+00018: 
+00019: 
+00020: 
+00021: 
+```
+#### hit line 22, pattern `initialize`
+```text
+00018: 
+00019: 
+00020: 
+00021: 
+00022: def initialize_database() -> None:
+00023:     DATA_DIR.mkdir(parents=True, exist_ok=True)
+00024: 
+00025:     schema_path = Path(__file__).resolve().parent / "schema.sql"
+00026: 
+```
+#### hit line 23, pattern `DATA_DIR`
+```text
+00019: 
+00020: 
+00021: 
+00022: def initialize_database() -> None:
+00023:     DATA_DIR.mkdir(parents=True, exist_ok=True)
+00024: 
+00025:     schema_path = Path(__file__).resolve().parent / "schema.sql"
+00026: 
+00027:     with sqlite3.connect(DB_PATH) as conn:
+```
+#### hit line 25, pattern `schema\.sql`
+```text
+00021: 
+00022: def initialize_database() -> None:
+00023:     DATA_DIR.mkdir(parents=True, exist_ok=True)
+00024: 
+00025:     schema_path = Path(__file__).resolve().parent / "schema.sql"
+00026: 
+00027:     with sqlite3.connect(DB_PATH) as conn:
+00028:         schema = schema_path.read_text(encoding="utf-8")
+00029:         conn.executescript(schema)
+```
+#### hit line 27, pattern `sqlite`
+```text
+00023:     DATA_DIR.mkdir(parents=True, exist_ok=True)
+00024: 
+00025:     schema_path = Path(__file__).resolve().parent / "schema.sql"
+00026: 
+00027:     with sqlite3.connect(DB_PATH) as conn:
+00028:         schema = schema_path.read_text(encoding="utf-8")
+00029:         conn.executescript(schema)
+00030:         conn.commit()
+```
+#### hit line 28, pattern `Path`
+```text
+00024: 
+00025:     schema_path = Path(__file__).resolve().parent / "schema.sql"
+00026: 
+00027:     with sqlite3.connect(DB_PATH) as conn:
+00028:         schema = schema_path.read_text(encoding="utf-8")
+00029:         conn.executescript(schema)
+00030:         conn.commit()
+```
+#### hit line 29, pattern `executescript`
+```text
+00025:     schema_path = Path(__file__).resolve().parent / "schema.sql"
+00026: 
+00027:     with sqlite3.connect(DB_PATH) as conn:
+00028:         schema = schema_path.read_text(encoding="utf-8")
+00029:         conn.executescript(schema)
+00030:         conn.commit()
+```
+
+### Functions
+#### `_resource_path` lines 9-17
+```python
+def _resource_path(relative_path: str) -> Path:
+    """Resolve resource path both in source and PyInstaller build."""
+    base_path = getattr(sys, "_MEIPASS", None)
+
+    if base_path:
+        return Path(base_path) / relative_path
+
+    # Source tree fallback
+    return Path(__file__).resolve().parents[2] / relative_path
+```
+#### `initialize_database` lines 22-30
+```python
+def initialize_database() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    schema_path = Path(__file__).resolve().parent / "schema.sql"
+
+    with sqlite3.connect(DB_PATH) as conn:
+        schema = schema_path.read_text(encoding="utf-8")
+        conn.executescript(schema)
+        conn.commit()
+```
+
+## File: `app\config.py`
+- lines: 15
+- ast: OK
+
+### Keyword contexts
+#### hit line 1, pattern `Path`
+```text
+00001: from pathlib import Path
+00002: 
+00003: 
+00004: BASE_DIR = Path(__file__).resolve().parent.parent
+00005: DATA_DIR = BASE_DIR / "data"
+```
+#### hit line 4, pattern `Path`
+```text
+00001: from pathlib import Path
+00002: 
+00003: 
+00004: BASE_DIR = Path(__file__).resolve().parent.parent
+00005: DATA_DIR = BASE_DIR / "data"
+00006: PROJECTS_DIR = BASE_DIR / "projects"
+00007: EXPORTS_DIR = BASE_DIR / "exports"
+00008: BACKUPS_DIR = BASE_DIR / "backups"
+```
+#### hit line 5, pattern `DATA_DIR`
+```text
+00001: from pathlib import Path
+00002: 
+00003: 
+00004: BASE_DIR = Path(__file__).resolve().parent.parent
+00005: DATA_DIR = BASE_DIR / "data"
+00006: PROJECTS_DIR = BASE_DIR / "projects"
+00007: EXPORTS_DIR = BASE_DIR / "exports"
+00008: BACKUPS_DIR = BASE_DIR / "backups"
+00009: PATCHES_DIR = BASE_DIR / "patches"
+```
+#### hit line 13, pattern `DB`
+```text
+00009: PATCHES_DIR = BASE_DIR / "patches"
+00010: LOGS_DIR = BASE_DIR / "logs"
+00011: DOCS_DIR = BASE_DIR / "docs"
+00012: 
+00013: DB_PATH = DATA_DIR / "app.db"
+00014: SETTINGS_DIR = DATA_DIR / "settings"
+00015: RECENT_PROJECTS_PATH = SETTINGS_DIR / "recent_projects.json"
+```
+#### hit line 14, pattern `DATA_DIR`
+```text
+00010: LOGS_DIR = BASE_DIR / "logs"
+00011: DOCS_DIR = BASE_DIR / "docs"
+00012: 
+00013: DB_PATH = DATA_DIR / "app.db"
+00014: SETTINGS_DIR = DATA_DIR / "settings"
+00015: RECENT_PROJECTS_PATH = SETTINGS_DIR / "recent_projects.json"
+```
+#### hit line 15, pattern `Path`
+```text
+00011: DOCS_DIR = BASE_DIR / "docs"
+00012: 
+00013: DB_PATH = DATA_DIR / "app.db"
+00014: SETTINGS_DIR = DATA_DIR / "settings"
+00015: RECENT_PROJECTS_PATH = SETTINGS_DIR / "recent_projects.json"
+```
+
+### Functions
+(none)
+
+## File: `app\utils\paths.py`
+- lines: 9
+- ast: OK
+
+### Keyword contexts
+#### hit line 1, pattern `Path`
+```text
+00001: from pathlib import Path
+00002: 
+00003: 
+00004: def normalize_path(path: str) -> Path:
+00005:     return Path(path).expanduser().resolve()
+```
+#### hit line 4, pattern `Path`
+```text
+00001: from pathlib import Path
+00002: 
+00003: 
+00004: def normalize_path(path: str) -> Path:
+00005:     return Path(path).expanduser().resolve()
+00006: 
+00007: 
+00008: def ensure_dir(path: Path) -> None:
+```
+#### hit line 5, pattern `Path`
+```text
+00001: from pathlib import Path
+00002: 
+00003: 
+00004: def normalize_path(path: str) -> Path:
+00005:     return Path(path).expanduser().resolve()
+00006: 
+00007: 
+00008: def ensure_dir(path: Path) -> None:
+00009:     path.mkdir(parents=True, exist_ok=True)
+```
+#### hit line 8, pattern `Path`
+```text
+00004: def normalize_path(path: str) -> Path:
+00005:     return Path(path).expanduser().resolve()
+00006: 
+00007: 
+00008: def ensure_dir(path: Path) -> None:
+00009:     path.mkdir(parents=True, exist_ok=True)
+```
+#### hit line 9, pattern `Path`
+```text
+00005:     return Path(path).expanduser().resolve()
+00006: 
+00007: 
+00008: def ensure_dir(path: Path) -> None:
+00009:     path.mkdir(parents=True, exist_ok=True)
+```
+
+### Functions
+#### `normalize_path` lines 4-5
+```python
+def normalize_path(path: str) -> Path:
+    return Path(path).expanduser().resolve()
+```
+#### `ensure_dir` lines 8-9
+```python
+def ensure_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+```
+
+## schema.sql check
+- path: E:\a4_to_a3_poster_studio\app\db\schema.sql
+- size: 1098 bytes
+- first 80 lines:
+```sql
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recent_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_path TEXT NOT NULL,
+    opened_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS project_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_name TEXT NOT NULL,
+    pdf_path TEXT,
+    output_mode TEXT DEFAULT 'no_cut',
+    split_layout TEXT DEFAULT 'left_right',
+    scale_percent REAL DEFAULT 96.0,
+    overlap_mm REAL DEFAULT 5.0,
+    safe_margin_mm REAL DEFAULT 5.0,
+    add_cut_guides INTEGER DEFAULT 1,
+    add_tile_numbers INTEGER DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS patch_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    version TEXT NOT NULL,
+    title TEXT NOT NULL,
+    applied_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_time TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    message TEXT NOT NULL
+);
+```

@@ -1,0 +1,102 @@
+import os
+from pathlib import Path
+from dataclasses import dataclass
+from typing import List
+
+import fitz
+import pytesseract
+from app.ocr_settings import load_ocr_settings
+from PIL import Image
+
+
+def configure_tesseract() -> dict:
+    settings = load_ocr_settings()
+
+    tesseract_cmd = settings.get("tesseract_cmd", "")
+    if tesseract_cmd:
+        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+
+    tessdata_dir = settings.get("tessdata_dir", "")
+    if tessdata_dir:
+        tessdata_dir = str(Path(tessdata_dir).resolve())
+        settings["tessdata_dir"] = tessdata_dir
+        os.environ["TESSDATA_PREFIX"] = tessdata_dir
+
+    return settings
+
+@dataclass
+class OcrTextBlock:
+    page_index: int
+    text: str
+    confidence: float
+    x: int
+    y: int
+    width: int
+    height: int
+    dpi: int
+
+
+def render_page_to_image(page: fitz.Page, dpi: int = 200) -> Image.Image:
+    scale = dpi / 72
+    matrix = fitz.Matrix(scale, scale)
+    pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+
+    return Image.frombytes(
+        "RGB",
+        (pixmap.width, pixmap.height),
+        pixmap.samples,
+    )
+
+
+def run_ocr_on_page(page: fitz.Page, page_index: int, language: str = "eng+kor", dpi: int = 200) -> List[OcrTextBlock]:
+    settings = configure_tesseract()
+    language = settings.get("language", language)
+    dpi = int(settings.get("dpi", dpi))
+
+    image = render_page_to_image(page, dpi=dpi)
+
+    data = pytesseract.image_to_data(
+        image,
+        lang=language,
+        output_type=pytesseract.Output.DICT,
+    )
+
+    results: List[OcrTextBlock] = []
+
+    for i, raw_text in enumerate(data.get("text", [])):
+        text = raw_text.strip()
+        if not text:
+            continue
+
+        try:
+            confidence = float(data["conf"][i])
+        except Exception:
+            confidence = -1.0
+
+        if confidence < 35:
+            continue
+
+        results.append(
+            OcrTextBlock(
+                page_index=page_index,
+                text=text,
+                confidence=confidence,
+                x=int(data["left"][i]),
+                y=int(data["top"][i]),
+                width=int(data["width"][i]),
+                height=int(data["height"][i]),
+                dpi=dpi,
+            )
+        )
+
+    return results
+
+
+def image_rect_to_pdf_rect(x: int, y: int, width: int, height: int, dpi: int):
+    scale = 72 / dpi
+    return fitz.Rect(
+        x * scale,
+        y * scale,
+        (x + width) * scale,
+        (y + height) * scale,
+    )

@@ -1,3 +1,4 @@
+from app.localization import t
 import sys
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -8,7 +9,7 @@ from app.main_window import MainWindow
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("PDF Poster Studio")
+    app.setApplicationName(t("app_title"))
     app.setOrganizationName("JI JEONG GEUN")
     app.setQuitOnLastWindowClosed(True)
 
@@ -17,8 +18,8 @@ def main() -> int:
     except Exception as exc:
         QMessageBox.critical(
             None,
-            "Database Error",
-            f"Failed to initialize database.\n\n{exc}"
+            t("database_error"),
+            f"{t('database_init_failed')}\n\n{exc}"
         )
         return 1
 

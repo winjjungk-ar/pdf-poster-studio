@@ -1,0 +1,6 @@
+{
+  "tesseract_cmd": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+  "tessdata_dir": "E:\\a4_to_a3_poster_studio\\app\\tessdata",
+  "language": "eng+kor",
+  "dpi": 150
+}
