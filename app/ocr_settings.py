@@ -25,7 +25,9 @@ def bundled_tesseract_path() -> str:
     candidates = [
         base / "tesseract" / "tesseract.exe",
         base / "Tesseract-OCR" / "tesseract.exe",
+        base / "_internal" / "Tesseract-OCR" / "tesseract.exe",
         base / "app" / "tesseract" / "tesseract.exe",
+        base / "_internal" / "app" / "tesseract" / "tesseract.exe",
     ]
 
     for path in candidates:
@@ -41,7 +43,9 @@ def bundled_tessdata_dir() -> str:
     candidates = [
         base / "tesseract" / "tessdata",
         base / "Tesseract-OCR" / "tessdata",
+        base / "_internal" / "Tesseract-OCR" / "tessdata",
         base / "app" / "tessdata",
+        base / "_internal" / "app" / "tessdata",
         Path(__file__).resolve().parent / "tessdata",
     ]
 
