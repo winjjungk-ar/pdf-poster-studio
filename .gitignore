@@ -1,52 +1,28 @@
 ﻿__pycache__/
 *.pyc
 *.pyo
-*.pyd
 
 .venv/
+.venv_*/
 venv/
 
-build/
-dist/
-release/
-dev_archive/
-
-*.spec
+*.bak
 *.bak_*
+*.py.bak*
+*.failed_*
 
-patch_*.py
-fix_*.py
-force_*.py
-direct_*.py
-safe_*.py
-*_check.py
-final_*_check.py
-github_ready_check.py
-*_report.txt
+app/cache/
+data/workspace_export_temp/
+data/settings/recent_projects.json
 
-data/temp_print/
-data/image_imports/
-exports/
-projects/
+*_audit.txt
+*_check.txt
+inspect_*.txt
+remaining_*.txt
+language_verify_after_patch.txt
+
+release_v*/
+PDF-Poster-Studio-v*.zip
 
 .DS_Store
 Thumbs.db
-
-*.failed_*
-*.failed*
-backups/
-build_scripts/
-docs/
-PDF POSTER/
-pdf-poster-studio/
-patch_history.json
-
-rotation_zoom_audit.py
-rotation_zoom_audit.txt
-wholepage_rotation_diagnose.txt
-validate_presets.py
-create_release*.py
-build_exe.py
-release_cleanup*.py
-current_ui_audit.py
-diagnose_*.py

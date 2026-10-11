@@ -5,6 +5,8 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app.db.database import initialize_database
 from app.main_window import MainWindow
+from app.converters.office_actions import install_office_actions
+from app.patches.unified_search import install_unified_search
 
 
 def main() -> int:
@@ -25,6 +27,8 @@ def main() -> int:
 
     print("[INFO] Creating MainWindow...")
     window = MainWindow()
+    install_office_actions(window)
+    install_unified_search(window)
 
     # Keep a strong reference on QApplication as well.
     app.main_window = window
@@ -43,3 +47,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

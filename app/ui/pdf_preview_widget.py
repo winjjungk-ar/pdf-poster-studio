@@ -28,12 +28,22 @@ class PdfPreviewWidget(QLabel):
         self._pixmap = pixmap
         self.setPixmap(pixmap)
 
-        # Important:
-        # Keep widget geometry exactly equal to the displayed pixmap.
-        # This prevents wrong selection coordinates after heavy zoom-out.
-        self.setMinimumSize(pixmap.size())
-        self.setMaximumSize(pixmap.size())
-        self.resize(pixmap.size())
+        # HiDPI-aware display size:
+        # pixmap.size() is physical pixels.
+        # If devicePixelRatio > 1, the logical on-screen size is smaller.
+        # QLabel geometry must use logical size so the page fills the expected area
+        # while the pixmap remains sharp.
+        try:
+            dpr = max(float(pixmap.devicePixelRatio()), 1.0)
+        except Exception:
+            dpr = 1.0
+
+        display_width = max(1, int(pixmap.width() / dpr))
+        display_height = max(1, int(pixmap.height() / dpr))
+
+        self.setMinimumSize(display_width, display_height)
+        self.setMaximumSize(display_width, display_height)
+        self.resize(display_width, display_height)
 
         self._selection_rect = self._clamp_rect_to_pixmap(self._selection_rect)
         self.update()
@@ -157,17 +167,28 @@ class PdfPreviewWidget(QLabel):
         self.update()
 
     def wheelEvent(self, event) -> None:
+        """
+        Ctrl + mouse wheel zoom.
+
+        Normal wheel events are ignored so the parent QScrollArea can scroll.
+        """
         if self._pixmap is None:
+            event.ignore()
             return
 
-        delta = event.angleDelta().y()
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
 
-        if delta > 0:
-            self.zoom_requested.emit(1)
-        elif delta < 0:
-            self.zoom_requested.emit(-1)
+            if delta > 0:
+                self.zoom_requested.emit(1)
+            elif delta < 0:
+                self.zoom_requested.emit(-1)
 
-        event.accept()
+            event.accept()
+            return
+
+        event.ignore()
+
 
     def paintEvent(self, event) -> None:
         # Do not draw placeholder rectangle before a PDF is loaded.

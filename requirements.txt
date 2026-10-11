@@ -2,3 +2,9 @@ PyQt6
 PyMuPDF
 pyinstaller
 pytesseract
+python-pptx
+python-docx
+openpyxl
+Pillow
+kiwipiepy
+pywin32

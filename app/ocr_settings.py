@@ -1,5 +1,6 @@
 import json
 import shutil
+import sys
 from pathlib import Path
 
 
@@ -12,7 +13,50 @@ DEFAULT_WINDOWS_PATHS = [
 ]
 
 
+def app_base_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+def bundled_tesseract_path() -> str:
+    base = app_base_dir()
+
+    candidates = [
+        base / "tesseract" / "tesseract.exe",
+        base / "Tesseract-OCR" / "tesseract.exe",
+        base / "app" / "tesseract" / "tesseract.exe",
+    ]
+
+    for path in candidates:
+        if path.exists():
+            return str(path)
+
+    return ""
+
+
+def bundled_tessdata_dir() -> str:
+    base = app_base_dir()
+
+    candidates = [
+        base / "tesseract" / "tessdata",
+        base / "Tesseract-OCR" / "tessdata",
+        base / "app" / "tessdata",
+        Path(__file__).resolve().parent / "tessdata",
+    ]
+
+    for path in candidates:
+        if path.exists():
+            return str(path.resolve())
+
+    return str((Path(__file__).resolve().parent / "tessdata").resolve())
+
+
 def find_tesseract_executable() -> str:
+    bundled = bundled_tesseract_path()
+    if bundled:
+        return bundled
+
     from_path = shutil.which("tesseract")
     if from_path:
         return from_path
@@ -27,9 +71,9 @@ def find_tesseract_executable() -> str:
 def load_ocr_settings() -> dict:
     data = {
         "tesseract_cmd": "",
-        "tessdata_dir": str((Path(__file__).parent / "tessdata").resolve()),
-        "language": "eng+kor",
-        "dpi": 200,
+        "tessdata_dir": bundled_tessdata_dir(),
+        "language": "eng+jpn+kor",
+        "dpi": 300,
     }
 
     try:
@@ -39,8 +83,16 @@ def load_ocr_settings() -> dict:
     except Exception:
         pass
 
-    if not data.get("tesseract_cmd"):
+    # 배포본 내부 tesseract를 우선 사용
+    bundled = bundled_tesseract_path()
+    if bundled:
+        data["tesseract_cmd"] = bundled
+        data["tessdata_dir"] = bundled_tessdata_dir()
+    elif not data.get("tesseract_cmd"):
         data["tesseract_cmd"] = find_tesseract_executable()
+
+    if not data.get("tessdata_dir"):
+        data["tessdata_dir"] = bundled_tessdata_dir()
 
     return data
 

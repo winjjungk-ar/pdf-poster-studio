@@ -84,3 +84,20 @@ Download the latest Windows build from the **Releases** page.
 pip install -r requirements.txt
 python main.py
 
+## Version 0.9.8-dev
+
+This development version focuses on workflow cleanup and Office conversion features.
+
+### Highlights
+
+- Task-first welcome screen
+- PDF viewer workflow
+- Poster creation workflow
+- PDF merge workflow
+- PDF split/extract workflow
+- PowerPoint, Word, Excel conversion
+- Improved PDF viewer rendering quality
+- Unified text search with OCR fallback
+
+See `docs/RELEASE_NOTES_0.9.8.md` for details.
+
